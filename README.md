@@ -34,7 +34,7 @@ jobs:
           ls -la
           
   security-gates:
-    uses: Trendyol/security-actions/.github/workflows/security-gates.yml@main
+    uses: Trendyol/security-actions/.github/workflows/security-gates.yml@master
     needs: your_build_job # Replace with your build job name
     permissions:
       actions: read

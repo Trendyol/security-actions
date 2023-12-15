@@ -1,0 +1,76 @@
+name: security-gates
+# Controls when the workflow will run
+on:
+  workflow_call:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "*" ]
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: prepare-gitleaks 
+        run: |
+          arc=$(uname -p)
+          [ "$arc" = "x86_64" ] && export arc="x64" || echo "$arc"
+          os=$(uname -s | tr '[:upper:]' '[:lower:]' )
+          gitleaksVersion=$(echo "8.18.1")
+          gl_full=$(printf "gitleaks_%s_%s_%s.tar.gz" "$gitleaksVersion" "$os" "$arc")
+          gl_download_link=$(printf "https://github.com/gitleaks/gitleaks/releases/download/v%s/%s" "$gitleaksVersion" "$gl_full")
+          wget $gl_download_link -q
+          tar -xzf $gl_full
+
+      - name: gitleaks-scan
+        run: |
+          ./gitleaks detect -f sarif -r gitleaks.sarif --redact --exit-code 0
+          
+      - name: gitlekas-result-upload
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: gitleaks.sarif
+        if: always()
+          
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: prepare-semgrep
+        run: |
+           python3 -m pip install semgrep
+      - name: semgrep-scan
+        run: |
+          semgrep ci --config=auto --sarif --output=semgrep.sarif || true
+        
+      - name: semgrep-result-upload
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: semgrep.sarif
+        if: always()
+          
+  sbom-scan:
+    name: grype-sbom
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: anchore/scan-action@v3
+        id: scan
+        with:
+          path: "."
+          output-format: sarif
+          fail-build: false
+
+      - name: sbom-result-upload
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+        if: always()

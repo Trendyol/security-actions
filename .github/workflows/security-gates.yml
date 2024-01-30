@@ -42,6 +42,7 @@ jobs:
       - name: gitleaks-scan
         run: |
           if [ {{$needs.visibility-check.outputs.visibility}} == "public" ]; then
+          echo "public"
           ./gitleaks detect -f sarif -r gitleaks.sarif --redact --exit-code 0
           else
           ./gitleaks detect --redact -v --exit-code 0
@@ -69,6 +70,8 @@ jobs:
         run: |
           if [ {{$needs.visibility-check.outputs.visibility}} == "public" ]; then
           semgrep ci --config=auto --sarif --output=semgrep.sarif || true
+          echo "public"
+          ls -l
           else
           semgrep ci --config=auto --text || true
           fi

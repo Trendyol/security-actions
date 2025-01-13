@@ -51,7 +51,7 @@ jobs:
           
       - name: gitleaks-result-upload
         if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
           
@@ -79,7 +79,7 @@ jobs:
           
       - name: semgrep-result-upload
         if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
           
@@ -110,6 +110,6 @@ jobs:
 
       - name: sbom-result-upload
         if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}

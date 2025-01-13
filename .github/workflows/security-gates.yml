@@ -33,7 +33,7 @@ jobs:
           arc=$(uname -p)
           [ "$arc" = "x86_64" ] && export arc="x64" || echo "$arc"
           os=$(uname -s | tr '[:upper:]' '[:lower:]' )
-          gitleaksVersion=$(echo "8.18.1")
+          gitleaksVersion=$(echo "8.22.1")
           gl_full=$(printf "gitleaks_%s_%s_%s.tar.gz" "$gitleaksVersion" "$os" "$arc")
           gl_download_link=$(printf "https://github.com/gitleaks/gitleaks/releases/download/v%s/%s" "$gitleaksVersion" "$gl_full")
           wget $gl_download_link -q

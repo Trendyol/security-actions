@@ -8,11 +8,6 @@ on:
   pull_request:
     branches: [ "*" ]
 
-permissions:
-  contents: read
-  security-events: write
-  id-token: write
-
 jobs:
   visibility-check:
     outputs:

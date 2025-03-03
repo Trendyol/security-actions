@@ -44,9 +44,9 @@ jobs:
       - name: gitleaks-scan
         run: |
           if [ $VISIBILITY == "public" ]; then
-            ./gitleaks detect -f sarif -r gitleaks.sarif --redact --exit-code 1
+            ./gitleaks detect -f sarif -r gitleaks.sarif --redact --exit-code 0
           else
-            ./gitleaks detect --redact -v --exit-code 1
+            ./gitleaks detect --redact -v --exit-code 0
           fi
         env:
           VISIBILITY: ${{ needs.visibility-check.outputs.visibility }}

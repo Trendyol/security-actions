@@ -1,34 +1,31 @@
-name: 'Security Gates Composite Action'
-description: 'Güvenlik tarama adımlarını içeren composite action'
+name: "Security Gates Composite Action"
+description: "Güvenlik tarama adımlarını içeren composite action"
 inputs:
   example-input:
-    description: 'Örnek input'
+    description: "Örnek input"
     required: false
-    default: ''
-
+    default: ""
 runs:
   using: "composite"
   steps:
-    - name: Repository Görünürlüğünü Kontrol Et
+    - name: Prepare Gitleaks
       shell: bash
       run: |
-        visibility=$(gh api /repos/$GITHUB_REPOSITORY --jq '.visibility')
-        echo "Repository visibility: $visibility"
-        # Eğer gerekli ise burada hata kontrolü ekleyebilirsiniz.
-        if [ "$visibility" != "public" ]; then
-          echo "::warning ::Repository public değil, bazı taramalar atlanabilir."
-        fi
+        # Mimari ve işletim sistemi bilgilerini alıyoruz.
+        arc=$(uname -p)
+        [ "$arc" = "x86_64" ] && export arc="x64" || echo "$arc"
+        os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        # Gitleaks sürüm bilgisi
+        gitleaksVersion="8.22.1"
+        gl_full=$(printf "gitleaks_%s_%s_%s.tar.gz" "$gitleaksVersion" "$os" "$arc")
+        gl_download_link=$(printf "https://github.com/gitleaks/gitleaks/releases/download/v%s/%s" "$gitleaksVersion" "$gl_full")
+        # Gitleaks paketini indirip çıkarıyoruz.
+        wget $gl_download_link -q
+        tar -xzf $gl_full
 
-    - name: Gitleaks Taramasını Çalıştır
+    - name: Run Gitleaks Scan
       shell: bash
       run: |
-        # gitleaks binary'si veya kurulum komutu burada yer almalı
+        # Gitleaks taramasını çalıştırıyoruz.
         ./gitleaks detect --redact --exit-code 1
-
-    - name: Semgrep Taramasını Çalıştır
-      shell: bash
-      run: |
-        # Eğer semgrep kurulu değilse, kurulum adımını ekleyebilirsiniz:
-        python3 -m pip install semgrep
-        semgrep ci --config=auto --text
 

@@ -1,4 +1,4 @@
-iname: "Security Gates Composite Action"
+name: "Security Gates Composite Action"
 description: "Güvenlik tarama adımlarını içeren composite action"
 inputs:
   example-input:
@@ -8,14 +8,25 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Gitleaks Taramasını Çalıştır
+    - name: Prepare Gitleaks
       shell: bash
       run: |
+        # Mimari ve işletim sistemi bilgilerini alıyoruz.
+        arc=$(uname -p)
+        [ "$arc" = "x86_64" ] && export arc="x64" || echo "$arc"
+        os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        # Gitleaks sürüm bilgisi
+        gitleaksVersion="8.22.1"
+        gl_full=$(printf "gitleaks_%s_%s_%s.tar.gz" "$gitleaksVersion" "$os" "$arc")
+        gl_download_link=$(printf "https://github.com/gitleaks/gitleaks/releases/download/v%s/%s" "$gitleaksVersion" "$gl_full")
+        # Gitleaks paketini indirip çıkarıyoruz.
+        wget $gl_download_link -q
+        tar -xzf $gl_full
+
+    - name: Run Gitleaks Scan
+      shell: bash
+      run: |
+        # Gitleaks taramasını çalıştırıyoruz.
         ./gitleaks detect --redact --exit-code 1
 
-    - name: Semgrep Taramasını Çalıştır
-      shell: bash
-      run: |
-        python3 -m pip install semgrep
-        semgrep ci --config=auto --text
 

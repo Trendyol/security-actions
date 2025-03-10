@@ -1,18 +1,19 @@
 name: security-gates
 
-# Controls when the workflow will run
 on:
   workflow_call:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
 
 jobs:
-  visibility-check:
-    outputs:
-      visibility: ${{ steps.drv.outputs.visibility }}
+  security-gates-check:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
     steps:
       - name: Determine repository visibility
         id: drv
@@ -22,96 +23,56 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  gitleaks:
-    name: gitleaks
-    needs: visibility-check
-    runs-on: ubuntu-latest
-    steps:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - name: prepare-gitleaks 
+
+      # Gitleaks
+      - name: Install & Run Gitleaks
         run: |
           arc=$(uname -p)
-          [ "$arc" = "x86_64" ] && export arc="x64" || echo "$arc"
-          os=$(uname -s | tr '[:upper:]' '[:lower:]' )
+          [ "$arc" = "x86_64" ] && arc="x64"
+          os=$(uname -s | tr '[:upper:]' '[:lower:]')
           gitleaksVersion="8.22.1"
-          gl_full=$(printf "gitleaks_%s_%s_%s.tar.gz" "$gitleaksVersion" "$os" "$arc")
-          gl_download_link=$(printf "https://github.com/gitleaks/gitleaks/releases/download/v%s/%s" "$gitleaksVersion" "$gl_full")
-          wget $gl_download_link -q
-          tar -xzf $gl_full
-
-      - name: gitleaks-scan
-        run: |
-          if [ $VISIBILITY == "public" ]; then
+          gl_full="gitleaks_${gitleaksVersion}_${os}_${arc}.tar.gz"
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${gitleaksVersion}/${gl_full}"
+          tar -xzf "$gl_full"
+          if [ "${{ steps.drv.outputs.visibility }}" == "public" ]; then
             ./gitleaks detect -f sarif -r gitleaks.sarif --redact --exit-code 1
           else
-            ./gitleaks detect --redact -v --exit-code 1
+            ./gitleaks detect --redact --exit-code 1
           fi
-        env:
-          VISIBILITY: ${{ needs.visibility-check.outputs.visibility }}
-          
-      - name: gitleaks-result-upload
-        if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v3
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: steps.drv.outputs.visibility == 'public'
         with:
           sarif_file: gitleaks.sarif
 
-  semgrep:
-    name: semgrep
-    needs: visibility-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-      - name: prepare-semgrep
+      # Semgrep
+      - name: Install & Run Semgrep
         run: |
-           python3 -m pip install semgrep
-           
-      - name: semgrep-scan
-        run: |
-          if [ $VISIBILITY == "public" ]; then
-            semgrep ci --config=auto --sarif --output=semgrep.sarif || true
+          pip install semgrep
+          if [ "${{ steps.drv.outputs.visibility }}" == "public" ]; then
+            semgrep ci --config=auto --sarif --output=semgrep.sarif
           else
-            semgrep ci --config=auto --text || true
+            semgrep ci --config=auto --text
           fi
-        env:
-          VISIBILITY: ${{ needs.visibility-check.outputs.visibility }}
-          
-      - name: semgrep-result-upload
-        if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v3
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: steps.drv.outputs.visibility == 'public'
         with:
           sarif_file: semgrep.sarif
 
-  sbom-scan:
-    name: grype-sbom
-    needs: visibility-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+      # SBOM Scan (Grype)
+      - name: Run Anchore SBOM Scan
+        uses: anchore/scan-action@v3
         with:
-          fetch-depth: 0
-          
-      - uses: anchore/scan-action@v3
+          path: "."
+          output-format: ${{ steps.drv.outputs.visibility == 'public' && 'sarif' || 'table' }}
+          fail-build: false
         id: scan
-        if: needs.visibility-check.outputs.visibility == 'public'
-        with:
-          path: "."
-          output-format: sarif
-          fail-build: false
-          
-      - uses: anchore/scan-action@v3
-        id: scan-private
-        if: needs.visibility-check.outputs.visibility == 'private'
-        with:
-          path: "."
-          output-format: table
-          fail-build: false
 
-      - name: sbom-result-upload
-        if: needs.visibility-check.outputs.visibility == 'public'
-        uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3
+        if: steps.drv.outputs.visibility == 'public'
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}

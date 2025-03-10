@@ -8,15 +8,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Repository Görünürlüğünü Kontrol Et
-      shell: bash
-      run: |
-        visibility=$(gh api /repos/$GITHUB_REPOSITORY --jq '.visibility')
-        echo "Repository visibility: $visibility"
-        if [ "$visibility" != "public" ]; then
-          echo "::warning ::Repository public değil, bazı taramalar atlanabilir."
-        fi
-
     - name: Gitleaks Taramasını Çalıştır
       shell: bash
       run: |

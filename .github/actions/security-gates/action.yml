@@ -10,6 +10,7 @@ runs:
   using: "composite"
   steps:
     - name: Repository Görünürlüğünü Kontrol Et
+      shell: bash
       run: |
         visibility=$(gh api /repos/$GITHUB_REPOSITORY --jq '.visibility')
         echo "Repository visibility: $visibility"
@@ -19,11 +20,13 @@ runs:
         fi
 
     - name: Gitleaks Taramasını Çalıştır
+      shell: bash
       run: |
         # gitleaks binary'si veya kurulum komutu burada yer almalı
         ./gitleaks detect --redact --exit-code 1
 
     - name: Semgrep Taramasını Çalıştır
+      shell: bash
       run: |
         # Eğer semgrep kurulu değilse, kurulum adımını ekleyebilirsiniz:
         python3 -m pip install semgrep

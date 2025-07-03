@@ -147,7 +147,7 @@ jobs:
           echo "Payload to send:"
           echo "$PAYLOAD"
 
-          curl -X POST "$ELASTIC_URL/my-index/_doc" \
+          curl -X POST "$ELASTIC_URL" \
             -u "${ES_USER}:${ES_PASS}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"

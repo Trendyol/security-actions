@@ -1,7 +1,7 @@
 # security-actions
 
 ## Description
-Security actions for Trendyol GitHub
+Security actions for Trendyol GitHub 
 
 ## Requirements
 * [GitHub Actions](

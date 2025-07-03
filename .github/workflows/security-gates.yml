@@ -137,8 +137,8 @@ jobs:
 
           echo "$PAYLOAD"
 
-          curl -X POST "$ELASTIC_URL" \
-            -u "$ES_USER:$ES_PASS" \
+          curl -X POST "${{ secrets.ELASTIC_URL }}" \
+            -u "${{ secrets.ES_USER }}:${{ secrets.ES_PASS }}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
 

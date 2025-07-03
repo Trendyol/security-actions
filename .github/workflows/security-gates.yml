@@ -93,6 +93,15 @@ jobs:
           ES_USER: ${{ secrets.ES_USER }}
           ES_PASS: ${{ secrets.ES_PASS }}
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+          CRITICAL_COUNT: ${{ env.CRITICAL_COUNT }}
+          HIGH_COUNT: ${{ env.HIGH_COUNT }}
+          MEDIUM_COUNT: ${{ env.MEDIUM_COUNT }}
+          LOW_COUNT: ${{ env.LOW_COUNT }}
+          TOTAL_COUNT: ${{ env.TOTAL_COUNT }}
+          GRYPE_DURATION: ${{ env.GRYPE_DURATION }}
+          SEMGREP_DURATION: ${{ env.SEMGREP_DURATION }}
+          GITLEAKS_DURATION: ${{ env.GITLEAKS_DURATION }}
+          START_TIME: ${{ env.START_TIME }}
         run: |
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
@@ -104,15 +113,15 @@ jobs:
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg trigger_user "${{ github.actor }}" \
-            --arg critical "$CRITICAL_COUNT" \
-            --arg high "$HIGH_COUNT" \
-            --arg medium "$MEDIUM_COUNT" \
-            --arg low "$LOW_COUNT" \
-            --arg total "$TOTAL_COUNT" \
-            --arg grype_duration "$GRYPE_DURATION" \
-            --arg semgrep_duration "$SEMGREP_DURATION" \
-            --arg gitleaks_duration "$GITLEAKS_DURATION" \
-            --arg total_duration "$TOTAL_DURATION" \
+            --argjson critical "$CRITICAL_COUNT" \
+            --argjson high "$HIGH_COUNT" \
+            --argjson medium "$MEDIUM_COUNT" \
+            --argjson low "$LOW_COUNT" \
+            --argjson total "$TOTAL_COUNT" \
+            --argjson grype_duration "$GRYPE_DURATION" \
+            --argjson semgrep_duration "$SEMGREP_DURATION" \
+            --argjson gitleaks_duration "$GITLEAKS_DURATION" \
+            --argjson total_duration "$TOTAL_DURATION" \
             '{
               "@timestamp": $timestamp,
               "pipeline": $pipeline,
@@ -121,24 +130,24 @@ jobs:
               "commit": $commit,
               "trigger_user": $trigger_user,
               "vulnerability_summary": {
-                "critical": ($critical | tonumber),
-                "high": ($high | tonumber),
-                "medium": ($medium | tonumber),
-                "low": ($low | tonumber),
-                "total": ($total | tonumber)
+                "critical": $critical,
+                "high": $high,
+                "medium": $medium,
+                "low": $low,
+                "total": $total
               },
               "durations": {
-                "grype_duration_sec": ($grype_duration | tonumber),
-                "semgrep_duration_sec": ($semgrep_duration | tonumber),
-                "gitleaks_duration_sec": ($gitleaks_duration | tonumber),
-                "total_duration_sec": ($total_duration | tonumber)
+                "grype_duration_sec": $grype_duration,
+                "semgrep_duration_sec": $semgrep_duration,
+                "gitleaks_duration_sec": $gitleaks_duration,
+                "total_duration_sec": $total_duration
               }
             }')
 
+          echo "Payload to send:"
           echo "$PAYLOAD"
 
           curl -X POST "$ELASTIC_URL" \
-            -u "$ES_USER:$ES_PASS" \
+            -u "${ES_USER}:${ES_PASS}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
-

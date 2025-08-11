@@ -93,9 +93,11 @@ jobs:
           ES_USER: ${{ secrets.ES_USER }}
           ES_PASS: ${{ secrets.ES_PASS }}
           ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+          CA_CERT: ${{ secrets.ca }}    
         run: |
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
+          echo "$CA_CERT" > trendyolrootca.crt
 
           PAYLOAD=$(jq -n \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -139,6 +141,8 @@ jobs:
 
           curl -X POST "${{ secrets.ELASTIC_URL }}" \
             -u "${{ secrets.ES_USER }}:${{ secrets.ES_PASS }}" \
+            --cacert trendyolrootca.crt \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
+
 

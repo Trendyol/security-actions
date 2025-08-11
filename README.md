@@ -10,7 +10,7 @@ Security actions for Trendyol GitHub
 * Using reusable workflows from the organization must be enabled on the repository.
 * [GitHub Advanced Security](https://docs.github.com/en/github/getting-started-with-github/about-github-advanced-security) must be enabled on the repository.
 * Security Dashboard must be enabled on the repository.
-
+dscds
 
 ## Usage
 Please note that `security-gates` should be added after your build job. Below, you can find an example action config for your repositories.

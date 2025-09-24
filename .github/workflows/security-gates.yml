@@ -91,10 +91,7 @@ jobs:
       ##################################################
       - name: Send metrics to Elasticsearch
         env:
-          ES_USER: ${{ secrets.ES_USER }}
-          ES_PASS: ${{ secrets.ES_PASS }}
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
-          CA_CERT: ${{ secrets.ca }}    
+          CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))

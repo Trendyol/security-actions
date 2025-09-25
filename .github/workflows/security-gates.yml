@@ -1,146 +1,22 @@
-name: security-gates
+name: Security Gates
 
 on:
-  workflow_call:
   push:
-    branches: [ "main", "master" ]
+    branches: [main, master]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [main, master]
 
 jobs:
-  security-gates:
+  validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Validate Workflow
+        run: echo "Validation successful"
 
-      - name: Set start time
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
-
-      ##################################################
-      # 🕵️ Gitleaks
-      ##################################################
-      - name: Install Gitleaks
-        run: |
-          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz
-          tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
-          chmod +x gitleaks
-
-      - name: Run Gitleaks
-        id: gitleaks_scan
-        run: |
-          START=$(date +%s)
-          ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact || true
-          END=$(date +%s)
-          echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      ##################################################
-      # 🕵️ Semgrep
-      ##################################################
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep
-        id: semgrep_scan
-        run: |
-          START=$(date +%s)
-          semgrep ci --json --output=semgrep-results.json || true
-          END=$(date +%s)
-          echo "SEMGREP_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      ##################################################
-      # 🕵️ Grype SBOM
-      ##################################################
-      - name: Install Grype
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Run Grype SBOM scan
-        id: grype_scan
-        run: |
-          START=$(date +%s)
-          grype dir:. -o json > grype-results.json || true
-          END=$(date +%s)
-          echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      ##################################################
-      # 📊 Compute Vulnerability Counts
-      ##################################################
-      - name: Compute vulnerability counts
-        id: vuln_count
-        run: |
-          if [ -f grype-results.json ]; then
-            CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity=="Critical")] | length' grype-results.json)
-            HIGH=$(jq '[.matches[] | select(.vulnerability.severity=="High")] | length' grype-results.json)
-            MEDIUM=$(jq '[.matches[] | select(.vulnerability.severity=="Medium")] | length' grype-results.json)
-            LOW=$(jq '[.matches[] | select(.vulnerability.severity=="Low")] | length' grype-results.json)
-            TOTAL=$(jq '.matches | length' grype-results.json)
-          else
-            CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; TOTAL=0
-          fi
-
-          echo "CRITICAL_COUNT=$CRITICAL" >> $GITHUB_ENV
-          echo "HIGH_COUNT=$HIGH" >> $GITHUB_ENV
-          echo "MEDIUM_COUNT=$MEDIUM" >> $GITHUB_ENV
-          echo "LOW_COUNT=$LOW" >> $GITHUB_ENV
-          echo "TOTAL_COUNT=$TOTAL" >> $GITHUB_ENV
-
-      ##################################################
-      # 🚀 Send to Elastic
-      ##################################################
-      - name: Send metrics to Elasticsearch
-        env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}    
-        run: |
-          END_TIME=$(date +%s)
-          TOTAL_DURATION=$((END_TIME - START_TIME))
-          echo "$CA_CERT" > trendyolrootca.crt
-
-          PAYLOAD=$(jq -n \
-            --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
-            --arg pipeline "${{ github.run_id }}" \
-            --arg repo "${{ github.repository }}" \
-            --arg branch "${{ github.ref_name }}" \
-            --arg commit "${{ github.sha }}" \
-            --arg trigger_user "${{ github.actor }}" \
-            --arg critical "$CRITICAL_COUNT" \
-            --arg high "$HIGH_COUNT" \
-            --arg medium "$MEDIUM_COUNT" \
-            --arg low "$LOW_COUNT" \
-            --arg total "$TOTAL_COUNT" \
-            --arg grype_duration "$GRYPE_DURATION" \
-            --arg semgrep_duration "$SEMGREP_DURATION" \
-            --arg gitleaks_duration "$GITLEAKS_DURATION" \
-            --arg total_duration "$TOTAL_DURATION" \
-            '{
-              "@timestamp": $timestamp,
-              "pipeline": $pipeline,
-              "repository": $repo,
-              "branch": $branch,
-              "commit": $commit,
-              "trigger_user": $trigger_user,
-              "vulnerability_summary": {
-                "critical": ($critical | tonumber),
-                "high": ($high | tonumber),
-                "medium": ($medium | tonumber),
-                "low": ($low | tonumber),
-                "total": ($total | tonumber)
-              },
-              "durations": {
-                "grype_duration_sec": ($grype_duration | tonumber),
-                "semgrep_duration_sec": ($semgrep_duration | tonumber),
-                "gitleaks_duration_sec": ($gitleaks_duration | tonumber),
-                "total_duration_sec": ($total_duration | tonumber)
-              }
-            }')
-
-          echo "$PAYLOAD"
-
-          curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
-            -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
-            --cacert trendyolrootca.crt \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
-
-
+  security-gates:
+    uses: Trendyol/security-actions/.github/workflows/security-gates.yml@master
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    secrets: inherit

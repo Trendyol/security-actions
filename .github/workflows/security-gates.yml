@@ -148,7 +148,6 @@ jobs:
           GITHUB_REPO: "https://github.com/${{ github.repository }}"
           GITHUB_SHA: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
           GITHUB_ACTOR: "https://github.com/${{ github.actor }}"
-          CUSTOM_MESSAGE: "Hello from GitHub Actions! Your build succeeded."
         run: |
           # Bulgu sayısını al (gitleaks-results.json dosyasını okuyoruz)
           COUNT=$(jq '. | length' gitleaks-results.json 2>/dev/null || echo 0)

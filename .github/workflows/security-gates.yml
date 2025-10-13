@@ -27,13 +27,16 @@ jobs:
           tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
           chmod +x gitleaks
 
+      # 🚨 Değişiklik: Gitleaks hata verirse bile devam etmesi için
       - name: Run Gitleaks
         id: gitleaks_scan
+        continue-on-error: true # Eğer Gitleaks bir sızıntı bulursa adım başarısız sayılacak ama workflow devam edecek
         run: |
           START=$(date +%s)
-          ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact || true
+          ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact
           END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
+        shell: bash
 
       ##################################################
       # 🕵️ Semgrep
@@ -91,7 +94,7 @@ jobs:
       ##################################################
       - name: Send metrics to Elasticsearch
         env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}    
+          CA_CERT: ${{ secrets.APPSEC_CA }}   
         run: |
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
@@ -142,5 +145,28 @@ jobs:
             --cacert trendyolrootca.crt \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"
+            
+      ##################################################
+      # 🔔 Conditional Slack Notification (Gitleaks)
+      ##################################################
+      - name: Send Gitleaks Failure Slack Notification
+        if: steps.gitleaks_scan.outcome == 'failure'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          ACTOR: ${{ github.actor }} # Workflow'u tetikleyen kullanıcı
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MESSAGE="🚨 *Gitleaks Secret Leak Detected* in \`${{ env.REPO }}\`\n"
+          MESSAGE+="Triggered by: *${{ env.ACTOR }}*\n" # Kullanıcı bilgisini ekledik
+          MESSAGE+="Branch: \`${{ env.BRANCH }}\`\n"
+          MESSAGE+="Commit: \`${{ env.COMMIT }}\`\n"
+          MESSAGE+="<${{ env.RUN_URL }}|View Workflow Run Details>"
+          
+          PAYLOAD=$(jq -n \
+            --arg text "$MESSAGE" \
+            '{ text: $text }')
 
-
+          curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" $SLACK_WEBHOOK_URL

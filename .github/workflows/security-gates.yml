@@ -27,13 +27,14 @@ jobs:
           tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
           chmod +x gitleaks
 
-      # 🚨 Değişiklik: Gitleaks hata verirse bile devam etmesi için
+      # 🚨 Düzeltme: Hata durumunda bile devam etmesi için 'continue-on-error: true' kullanıldı
       - name: Run Gitleaks
         id: gitleaks_scan
-        continue-on-error: true # Eğer Gitleaks bir sızıntı bulursa adım başarısız sayılacak ama workflow devam edecek
+        continue-on-error: true # Gitleaks secret bulursa başarısız sayılır ancak workflow devam eder.
         run: |
           START=$(date +%s)
-          ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact
+          # Gitleaks hata verse bile duration hesaplansın
+          ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact || true
           END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
         shell: bash
@@ -73,6 +74,7 @@ jobs:
       - name: Compute vulnerability counts
         id: vuln_count
         run: |
+          # JQ yüklü olduğundan emin olun (ubuntu-latest üzerinde genelde yüklüdür)
           if [ -f grype-results.json ]; then
             CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity=="Critical")] | length' grype-results.json)
             HIGH=$(jq '[.matches[] | select(.vulnerability.severity=="High")] | length' grype-results.json)
@@ -96,6 +98,11 @@ jobs:
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}   
         run: |
+          # 🚨 Düzeltme: Hata durumunda boş kalan süre değişkenlerini 0 ile varsayılana ayarlama
+          GRYPE_DUR="${GRYPE_DURATION:-0}"
+          SEMGREP_DUR="${SEMGREP_DURATION:-0}"
+          GITLEAKS_DUR="${GITLEAKS_DURATION:-0}"
+          
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
           echo "$CA_CERT" > trendyolrootca.crt
@@ -112,9 +119,9 @@ jobs:
             --arg medium "$MEDIUM_COUNT" \
             --arg low "$LOW_COUNT" \
             --arg total "$TOTAL_COUNT" \
-            --arg grype_duration "$GRYPE_DURATION" \
-            --arg semgrep_duration "$SEMGREP_DURATION" \
-            --arg gitleaks_duration "$GITLEAKS_DURATION" \
+            --arg grype_duration "$GRYPE_DUR" \
+            --arg semgrep_duration "$SEMGREP_DUR" \
+            --arg gitleaks_duration "$GITLEAKS_DUR" \
             --arg total_duration "$TOTAL_DURATION" \
             '{
               "@timestamp": $timestamp,
@@ -150,6 +157,7 @@ jobs:
       # 🔔 Conditional Slack Notification (Gitleaks)
       ##################################################
       - name: Send Gitleaks Failure Slack Notification
+        # Sadece Gitleaks adımı başarısız (secret buldu) olduğunda çalışır
         if: steps.gitleaks_scan.outcome == 'failure'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

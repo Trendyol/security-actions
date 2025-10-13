@@ -98,14 +98,29 @@ jobs:
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}   
         run: |
-          # 🚨 Düzeltme: Hata durumunda boş kalan süre değişkenlerini 0 ile varsayılana ayarlama
           GRYPE_DUR="${GRYPE_DURATION:-0}"
           SEMGREP_DUR="${SEMGREP_DURATION:-0}"
           GITLEAKS_DUR="${GITLEAKS_DURATION:-0}"
+
+          CRITICAL_COUNT="${CRITICAL_COUNT:-0}"
+          HIGH_COUNT="${HIGH_COUNT:-0}"
+          MEDIUM_COUNT="${MEDIUM_COUNT:-0}"
+          LOW_COUNT="${LOW_COUNT:-0}"
+          TOTAL_COUNT="${TOTAL_COUNT:-0}"
           
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
           echo "$CA_CERT" > trendyolrootca.crt
+
+          echo "CRITICAL_COUNT=$CRITICAL_COUNT"
+          echo "HIGH_COUNT=$HIGH_COUNT"
+          echo "MEDIUM_COUNT=$MEDIUM_COUNT"
+          echo "LOW_COUNT=$LOW_COUNT"
+          echo "TOTAL_COUNT=$TOTAL_COUNT"
+          echo "GRYPE_DUR=$GRYPE_DUR"
+          echo "SEMGREP_DUR=$SEMGREP_DUR"
+          echo "GITLEAKS_DUR=$GITLEAKS_DUR"
+          echo "TOTAL_DURATION=$TOTAL_DURATION"
 
           PAYLOAD=$(jq -n \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -165,16 +180,4 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
           ACTOR: ${{ github.actor }} # Workflow'u tetikleyen kullanıcı
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          MESSAGE="🚨 *Gitleaks Secret Leak Detected* in \`${{ env.REPO }}\`\n"
-          MESSAGE+="Triggered by: *${{ env.ACTOR }}*\n" # Kullanıcı bilgisini ekledik
-          MESSAGE+="Branch: \`${{ env.BRANCH }}\`\n"
-          MESSAGE+="Commit: \`${{ env.COMMIT }}\`\n"
-          MESSAGE+="<${{ env.RUN_URL }}|View Workflow Run Details>"
-          
-          PAYLOAD=$(jq -n \
-            --arg text "$MESSAGE" \
-            '{ text: $text }')
-
-          curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" $SLACK_WEBHOOK_URL
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/r

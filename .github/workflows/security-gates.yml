@@ -27,17 +27,41 @@ jobs:
           tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
           chmod +x gitleaks
 
-      # 🚨 Düzeltme: Hata durumunda bile devam etmesi için 'continue-on-error: true' kullanıldı
       - name: Run Gitleaks
         id: gitleaks_scan
-        continue-on-error: true # Gitleaks secret bulursa başarısız sayılır ancak workflow devam eder.
         run: |
           START=$(date +%s)
-          # Gitleaks hata verse bile duration hesaplansın
           ./gitleaks detect --report-format json --report-path gitleaks-results.json --redact || true
           END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
-        shell: bash
+
+      # Yeni adım: Gitleaks bulgu kontrolü ve Slack bildirimi
+      - name: Send Slack notification if Gitleaks found secrets
+        if: ${{ always() }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Bulgu var mı diye kontrol et (gitleaks-results.json boş mu değil mi)
+          if [ -s gitleaks-results.json ]; then
+            COUNT=$(jq '. | length' gitleaks-results.json)
+            if [ "$COUNT" -gt 0 ]; then
+              TIMESTAMP=$(date --utc +'%Y-%m-%dT%H:%M:%SZ')
+              MESSAGE="⚠️ *Gitleaks Found Secrets!* \n
+              Repository: $GITHUB_REPO\n
+              Commit: $GITHUB_SHA\n
+              Branch: $GITHUB_REF_NAME\n
+              Triggered by: $GITHUB_ACTOR\n
+              Date: $TIMESTAMP\n
+              *Number of findings:* $COUNT"
+
+              PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text}')
+              curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" $SLACK_WEBHOOK_URL
+            fi
+          fi
 
       ##################################################
       # 🕵️ Semgrep
@@ -74,7 +98,6 @@ jobs:
       - name: Compute vulnerability counts
         id: vuln_count
         run: |
-          # JQ yüklü olduğundan emin olun (ubuntu-latest üzerinde genelde yüklüdür)
           if [ -f grype-results.json ]; then
             CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity=="Critical")] | length' grype-results.json)
             HIGH=$(jq '[.matches[] | select(.vulnerability.severity=="High")] | length' grype-results.json)
@@ -96,31 +119,11 @@ jobs:
       ##################################################
       - name: Send metrics to Elasticsearch
         env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}   
+          CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
-          GRYPE_DUR="${GRYPE_DURATION:-0}"
-          SEMGREP_DUR="${SEMGREP_DURATION:-0}"
-          GITLEAKS_DUR="${GITLEAKS_DURATION:-0}"
-
-          CRITICAL_COUNT="${CRITICAL_COUNT:-0}"
-          HIGH_COUNT="${HIGH_COUNT:-0}"
-          MEDIUM_COUNT="${MEDIUM_COUNT:-0}"
-          LOW_COUNT="${LOW_COUNT:-0}"
-          TOTAL_COUNT="${TOTAL_COUNT:-0}"
-          
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
           echo "$CA_CERT" > trendyolrootca.crt
-
-          echo "CRITICAL_COUNT=$CRITICAL_COUNT"
-          echo "HIGH_COUNT=$HIGH_COUNT"
-          echo "MEDIUM_COUNT=$MEDIUM_COUNT"
-          echo "LOW_COUNT=$LOW_COUNT"
-          echo "TOTAL_COUNT=$TOTAL_COUNT"
-          echo "GRYPE_DUR=$GRYPE_DUR"
-          echo "SEMGREP_DUR=$SEMGREP_DUR"
-          echo "GITLEAKS_DUR=$GITLEAKS_DUR"
-          echo "TOTAL_DURATION=$TOTAL_DURATION"
 
           PAYLOAD=$(jq -n \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -134,9 +137,9 @@ jobs:
             --arg medium "$MEDIUM_COUNT" \
             --arg low "$LOW_COUNT" \
             --arg total "$TOTAL_COUNT" \
-            --arg grype_duration "$GRYPE_DUR" \
-            --arg semgrep_duration "$SEMGREP_DUR" \
-            --arg gitleaks_duration "$GITLEAKS_DUR" \
+            --arg grype_duration "$GRYPE_DURATION" \
+            --arg semgrep_duration "$SEMGREP_DURATION" \
+            --arg gitleaks_duration "$GITLEAKS_DURATION" \
             --arg total_duration "$TOTAL_DURATION" \
             '{
               "@timestamp": $timestamp,
@@ -166,18 +169,4 @@ jobs:
             -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
             --cacert trendyolrootca.crt \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
-            
-      ##################################################
-      # 🔔 Conditional Slack Notification (Gitleaks)
-      ##################################################
-      - name: Send Gitleaks Failure Slack Notification
-        # Sadece Gitleaks adımı başarısız (secret buldu) olduğunda çalışır
-        if: steps.gitleaks_scan.outcome == 'failure'
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
-          ACTOR: ${{ github.actor }} # Workflow'u tetikleyen kullanıcı
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/r
+            -d "$PAYLOAD" 

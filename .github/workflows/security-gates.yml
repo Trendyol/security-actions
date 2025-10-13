@@ -153,8 +153,9 @@ jobs:
           COUNT=$(jq '. | length' gitleaks-results.json 2>/dev/null || echo 0)
 
           if [ "$COUNT" -gt 0 ]; then
-          CUSTOM_MESSAGE=${{ secrets.APPSEC_SLACK_MESSAGE }}
-          curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"${CUSTOM_MESSAGE}\"}" $SLACK_WEBHOOK_URL
+          MESSAGE=":warning: Gitleaks Secret bulgusu bulundu! İnceleme gerekli :rotating_light: <@appsec-oncall>\nRepo: $GITHUB_REPO\nCommit: $GITHUB_SHA\nKullanıcı: $GITHUB_ACTOR\nBulgular: $COUNT"
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text}')
+          curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
           else
-          echo "No Gitleaks findings, skipping Slack notification."
+           echo "No Gitleaks findings, skipping Slack notification."
           fi

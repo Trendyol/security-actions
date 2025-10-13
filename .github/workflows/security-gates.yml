@@ -145,16 +145,16 @@ jobs:
       - name: Send Slack Notification
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GITHUB_REPO: ${{ github.repository }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPO: "https://github.com/${{ github.repository }}"
+          GITHUB_SHA: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          GITHUB_ACTOR: "https://github.com/${{ github.actor }}"
           CUSTOM_MESSAGE: "Hello from GitHub Actions! Your build succeeded."
         run: |
           # Bulgu sayısını al (gitleaks-results.json dosyasını okuyoruz)
           COUNT=$(jq '. | length' gitleaks-results.json 2>/dev/null || echo 0)
 
           if [ "$COUNT" -gt 0 ]; then
-          CUSTOM_MESSAGE="⚠️ Gitleaks bulgusu bulundu!\nRepo: $GITHUB_REPO\nCommit: $GITHUB_SHA\nKullanıcı: $GITHUB_ACTOR\nBulgular: $COUNT"
+          CUSTOM_MESSAGE=${{ secrets.APPSEC_SLACK_MESSAGE }}
           curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"${CUSTOM_MESSAGE}\"}" $SLACK_WEBHOOK_URL
           else
           echo "No Gitleaks findings, skipping Slack notification."

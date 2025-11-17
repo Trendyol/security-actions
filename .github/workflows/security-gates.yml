@@ -155,7 +155,7 @@ jobs:
           if [ "$COUNT" -gt 0 ]; then
           MESSAGE=":warning: Gitleaks Secret bulgusu bulundu! İnceleme gerekli :rotating_light: <!subteam^S094H6SEC06|appsec-oncall> 
           Repo: $GITHUB_REPO
-          Commit: $GITHUB_SHA 
+          Commit: "$GITHUB_REPO/commit/$GITHUB_SHA"
           Kullanıcı: $GITHUB_ACTOR 
           Bulgular: $COUNT"
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text}')

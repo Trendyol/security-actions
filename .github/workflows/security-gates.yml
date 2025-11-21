@@ -91,22 +91,11 @@ jobs:
       ##################################################
       - name: Send metrics to Elasticsearch
         env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}
-          ES_URL_RAW: ${{ secrets.APPSEC_ELASTIC_URL }} 
-          ES_USER: ${{ secrets.APPSEC_ELASTIC_USER }}
-          ES_PASS: ${{ secrets.APPSEC_ELASTIC_PASS }}
+          CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
-          echo "$CA_CERT" > trendyolrootca.crt 
-
-          ES_URL=$(echo "$ES_URL_RAW" | tr -d '\n' | tr -d '\r')
-
-          if [ -z "$ES_URL" ]; then
-            echo "ERROR: APPSEC_ELASTIC_URL secret is empty."
-            exit 1
-          fi
-
+          echo "$CA_CERT" > trendyolrootca.crt
 
           PAYLOAD=$(jq -n \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -148,8 +137,8 @@ jobs:
 
           echo "$PAYLOAD"
 
-          curl -X POST "$ES_URL" \
-            -u "$ES_USER:$ES_PASS" \
+          curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
+            -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
             --cacert trendyolrootca.crt \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD"

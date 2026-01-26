@@ -74,16 +74,47 @@ jobs:
         with:
           sarif_file: .
 
-      - name: Compute & Send Metrics
+      - name: Compute vulnerability counts
+        id: vuln_count
+        run: |
+          # Gitleaks Kontrolü
+          if [ -f gitleaks.sarif ]; then
+            GITLEAKS_TOTAL=$(jq '[.runs[].results[]] | length' gitleaks.sarif || echo 0)
+          else
+            GITLEAKS_TOTAL=0
+          fi
+
+          # Semgrep Kontrolü
+          if [ -f semgrep.sarif ]; then
+            SEMGREP_TOTAL=$(jq '[.runs[].results[]] | length' semgrep.sarif || echo 0)
+          else
+            SEMGREP_TOTAL=0
+          fi
+
+          # Grype Kontrolü ve Severity Sayımı
+          if [ -f grype.sarif ]; then
+            CRITICAL=$(jq '[.runs[].results[] | select(.properties.severity == "Critical")] | length' grype.sarif || echo 0)
+            HIGH=$(jq '[.runs[].results[] | select(.properties.severity == "High")] | length' grype.sarif || echo 0)
+            MEDIUM=$(jq '[.runs[].results[] | select(.properties.severity == "Medium")] | length' grype.sarif || echo 0)
+            LOW=$(jq '[.runs[].results[] | select(.properties.severity == "Low")] | length' grype.sarif || echo 0)
+            TOTAL=$(jq '[.runs[].results[]] | length' grype.sarif || echo 0)
+          else
+            CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; TOTAL=0
+          fi
+
+          # Metrikleri ENV'ye basıyoruz
+          echo "GITLEAKS_COUNT=$GITLEAKS_TOTAL" >> $GITHUB_ENV
+          echo "SEMGREP_COUNT=$SEMGREP_TOTAL" >> $GITHUB_ENV
+          echo "CRITICAL_COUNT=$CRITICAL" >> $GITHUB_ENV
+          echo "HIGH_COUNT=$HIGH" >> $GITHUB_ENV
+          echo "MEDIUM_COUNT=$MEDIUM" >> $GITHUB_ENV
+          echo "LOW_COUNT=$LOW" >> $GITHUB_ENV
+          echo "TOTAL_COUNT=$TOTAL" >> $GITHUB_ENV
+
+      - name: Send metrics to Elasticsearch
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
-          CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity=="Critical")] | length'  grype.sarif || echo 0)
-          HIGH=$(jq '[.matches[] | select(.vulnerability.severity=="High")] | length'  grype.sarif || echo 0)
-          MEDIUM=$(jq '[.matches[] | select(.vulnerability.severity=="Medium")] | length'  grype.sarif || echo 0)
-          LOW=$(jq '[.matches[] | select(.vulnerability.severity=="Low")] | length'  grype.sarif || echo 0)
-          TOTAL=$(jq '.matches | length'  grype.sarif || echo 0)
-
           END_TIME=$(date +%s)
           TOTAL_DURATION=$((END_TIME - START_TIME))
           echo "$CA_CERT" > trendyolrootca.crt
@@ -95,11 +126,13 @@ jobs:
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg trigger_user "${{ github.actor }}" \
-            --arg critical "$CRITICAL" \
-            --arg high "$HIGH" \
-            --arg medium "$MEDIUM" \
-            --arg low "$LOW" \
-            --arg total "$TOTAL" \
+            --arg critical "$CRITICAL_COUNT" \
+            --arg high "$HIGH_COUNT" \
+            --arg medium "$MEDIUM_COUNT" \
+            --arg low "$LOW_COUNT" \
+            --arg total "$TOTAL_COUNT" \
+            --arg gitleaks_total "$GITLEAKS_COUNT" \
+            --arg semgrep_total "$SEMGREP_COUNT" \
             --arg grype_duration "$GRYPE_DURATION" \
             --arg semgrep_duration "$SEMGREP_DURATION" \
             --arg gitleaks_duration "$GITLEAKS_DURATION" \
@@ -113,7 +146,10 @@ jobs:
               "trigger_user": $trigger_user,
               "vulnerability_summary": {
                 "critical": ($critical | tonumber), "high": ($high | tonumber),
-                "medium": ($medium | tonumber), "low": ($low | tonumber), "total": ($total | tonumber)
+                "medium": ($medium | tonumber), "low": ($low | tonumber), 
+                "grype_total": ($total | tonumber),
+                "gitleaks_total": ($gitleaks_total | tonumber),
+                "semgrep_total": ($semgrep_total | tonumber)
               },
               "durations": {
                 "grype_duration_sec": ($grype_duration | tonumber),
@@ -132,7 +168,7 @@ jobs:
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          GITLEAKS_COUNT=$(jq '. | length' gitleaks-results.json 2>/dev/null || echo 0)
+          # ENV'den okuyoruz
           if [ "$GITLEAKS_COUNT" -gt 0 ]; then
             MESSAGE=":rotating_light: *Gitleaks:* $GITLEAKS_COUNT bulgu bulundu! <https://github.com/${{ github.repository }}/security/code-scanning|İncele>"
             curl -X POST -H 'Content-type: application/json' --data "$(jq -n --arg text "$MESSAGE" '{text: $text}')" "$SLACK_WEBHOOK_URL"

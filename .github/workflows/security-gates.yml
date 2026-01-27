@@ -30,6 +30,10 @@ jobs:
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz && tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
           START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
+          
+      - name: Commit Secret Scan Alert
+        run: |
+          gitleaks detect --log-opts="--max-count=1 $GITHUB_SHA" --report-path commit-gitleaks.sarif --redact || true;
 
       - name: Run Semgrep Scan
         run: |
@@ -69,11 +73,20 @@ jobs:
             LEAK_COUNT=0
             echo "LEAKS_DETAILS=Bulgu yok." >> "$GITHUB_ENV"
           fi
-
+  
           echo "LEAKS_COUNT=$LEAK_COUNT" >> "$GITHUB_ENV"
           echo "S_TOTAL=$S_TOTAL" >> "$GITHUB_ENV"
           echo "G_CRITICAL=$G_CRIT" >> "$GITHUB_ENV"
-
+          
+           if [ -f commit-gitleaks.sarif ]; then
+            CURRENT_LEAK_COUNT=$(jq '[.runs[].results[]?] | length' commit-gitleaks.sarif || echo 0)  
+            echo "CURRENT_LEAKS_DETAILS<<EOF" >> "$GITHUB_ENV"
+            jq -r '.runs[].results[]? | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' commit-gitleaks.sarif >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+           else
+            LEAK_COUNT=0          
+            echo "CURRENT_LEAKS_DETAILS= Commit'te Bulgu yok." >> "$GITHUB_ENV"
+           fi
       
       - name: Send to Elastic
         env:
@@ -105,18 +118,19 @@ jobs:
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       - name: Slack Notification
-        if: env.LEAKS_COUNT != '0'
+        if: env.CURRENT_LEAKS_COUNT != '0'
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-         
-          MESSAGE=":rotating_light: *Gitleaks Secret Bulguları Tespit Edildi!*
-          *Repo:* ${{ github.repository }}
-          *Toplam Bulgu:* $LEAKS_COUNT
+          MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli <!subteam^S094H6SEC06|appsec-oncall>*
+          *Repo:* "https://github.com/${{ github.repository }}"
+          Commit: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          Kullanıcı: "https://github.com/${{ github.actor }}"
+          *Toplam Bulgu:* $CURRENT_LEAKS_COUNT
 
           *Bulguların Listesi:*
           \`\`\`
-          $LEAKS_DETAILS
+          $CURRENT_LEAKS_DETAILS
           \`\`\`"
           
           PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')

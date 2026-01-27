@@ -10,7 +10,6 @@ on:
 jobs:
   security-gates:
     runs-on: ubuntu-latest
-    # HATAYI ÇÖZEN KISIM: Dashboard'a yazma ve aksiyonları okuma izni
     permissions:
       security-events: write
       actions: read
@@ -26,7 +25,7 @@ jobs:
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
       ##################################################
-      # 🕵️ Araçları Çalıştır (SARIF Format)
+      # 🕵️ Araçları Çalıştır (SARIF Üretimi)
       ##################################################
       - name: Run Gitleaks
         run: |
@@ -47,17 +46,18 @@ jobs:
           echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
 
       ##################################################
-      # 📊 Dashboard Yükleme (URI Fixli)
+      # 📊 Dashboard Yükleme (SADECE PUBLIC REPOLAR İÇİN)
       ##################################################
       - name: Upload Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        # github.event.repository.private 'false' ise public demektir.
+        if: always() && github.event.repository.private == false
         with:
           sarif_file: .
-          checkout_path: ${{ github.workspace }} # URI/Path hatalarını azaltır
+          checkout_path: ${{ github.workspace }}
 
       ##################################################
-      # 📊 Detaylı Sayım (Grype, Semgrep, Gitleaks)
+      # 📊 Detaylı Sayım (Metrikler Her Zaman Hesaplanır)
       ##################################################
       - name: Compute vulnerability counts
         id: vuln_count
@@ -80,16 +80,14 @@ jobs:
             S_ERR=0; S_WARN=0
           fi
 
-          # --- GITLEAKS DETAY (File:Line) ---
+          # --- GITLEAKS DETAY ---
           if [ -f gitleaks.sarif ]; then
             LEAK_TOTAL=$(jq '[.runs[].results[]] | length' gitleaks.sarif || echo 0)
-            # Loglar için ilk 5 bulgunun dosya:satır bilgisi
             LEAK_LOGS=$(jq -r '.runs[0].results[] | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' gitleaks.sarif | head -n 5 | tr '\n' ' ')
           else
             LEAK_TOTAL=0; LEAK_LOGS="N/A"
           fi
 
-          # Metrikleri ENV'ye bas
           echo "G_CRITICAL=$G_CRIT" >> $GITHUB_ENV
           echo "G_HIGH=$G_HIGH" >> $GITHUB_ENV
           echo "G_MEDIUM=$G_MED" >> $GITHUB_ENV
@@ -100,7 +98,7 @@ jobs:
           echo "LEAKS_DETAILS=$LEAK_LOGS" >> $GITHUB_ENV
 
       ##################################################
-      # 🚀 Elasticsearch Metrikleri (Bug Fixli)
+      # 🚀 Elasticsearch Metrikleri (Her Zaman Gönderilir)
       ##################################################
       - name: Send to Elastic
         env:
@@ -123,6 +121,7 @@ jobs:
               "repository": $repo,
               "commit": $commit,
               "trigger_user": $actor,
+              "visibility": (if "${{ github.event.repository.private }}" == "true" then "private" else "public" end),
               "vulnerability_details": {
                 "grype": { "critical": ($g_crit | tonumber), "high": ($g_high | tonumber), "medium": ($g_med | tonumber), "low": ($g_low | tonumber) },
                 "semgrep": { "error": ($s_err | tonumber), "warning": ($s_warn | tonumber) },
@@ -136,7 +135,7 @@ jobs:
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       ##################################################
-      # 📢 Slack Notification (Yeni Bulgular)
+      # 📢 Slack Notification
       ##################################################
       - name: Slack Notification
         if: env.LEAKS_COUNT != '0'
@@ -146,8 +145,7 @@ jobs:
           MESSAGE=":rotating_light: *Gitleaks Bulgusu Tespit Edildi!*
           *Repo:* ${{ github.repository }}
           *Bulgu Sayısı:* $LEAKS_COUNT
-          *Konumlar:* \`$LEAKS_DETAILS\`
+          *Konumlar:* \`$LEAKS_DETAILS\`"
           
-          <https://github.com/${{ github.repository }}/security/code-scanning|Dashboard'dan incele. Yeni değilse dismiss et!>"
-          
+          # Private repolarda dashboard linki çalışmayabileceği için mesajı ona göre düzenleyebilirsin
           curl -X POST -H 'Content-type: application/json' --data "$(jq -n --arg text "$MESSAGE" '{text: $text}')" "$SLACK_WEBHOOK_URL"

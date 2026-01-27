@@ -24,9 +24,7 @@ jobs:
       - name: Set start time
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
-      ##################################################
-      # 🕵️ Araçları Çalıştır
-      ##################################################
+
       - name: Run Gitleaks
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz && tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
@@ -45,9 +43,7 @@ jobs:
           START=$(date +%s); grype dir:. -o sarif > grype.sarif || true; END=$(date +%s)
           echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
 
-      ##################################################
-      # 📊 Dashboard Yükleme (Sadece Public)
-      ##################################################
+
       - name: Upload Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always() && github.event.repository.private == false
@@ -55,21 +51,17 @@ jobs:
           sarif_file: .
           checkout_path: ${{ github.workspace }}
 
-      ##################################################
-      # 📊 Sayım ve Multiline Gitleaks Listesi Hazırlama
-      ##################################################
       - name: Compute vulnerability counts
         id: vuln_count
         run: |
-          # --- SEMGREP & GRYPE (Elastic Metrikleri İçin) ---
           S_TOTAL=$(jq '[.runs[].results[]?] | length' semgrep.sarif || echo 0)
           G_CRIT=$(jq '[.runs[].results[]? | select(.properties.severity == "Critical")] | length' grype.sarif || echo 0)
 
-          # --- GITLEAKS (TÜM BULGULAR - NEW LINE) ---
+          
           if [ -f gitleaks.sarif ]; then
             LEAK_COUNT=$(jq '[.runs[].results[]?] | length' gitleaks.sarif || echo 0)
             
-            # Multiline aktarım: Tüm bulguları dosya:satır formatında alıyoruz
+           
             echo "LEAKS_DETAILS<<EOF" >> "$GITHUB_ENV"
             jq -r '.runs[].results[]? | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' gitleaks.sarif >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
@@ -82,9 +74,7 @@ jobs:
           echo "S_TOTAL=$S_TOTAL" >> "$GITHUB_ENV"
           echo "G_CRITICAL=$G_CRIT" >> "$GITHUB_ENV"
 
-      ##################################################
-      # 🚀 Elasticsearch Gönderimi (Metrikler Bozulmasın)
-      ##################################################
+      
       - name: Send to Elastic
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}    
@@ -114,15 +104,12 @@ jobs:
             -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
-      ##################################################
-      # 📢 Slack: SADECE Gitleaks Bulguları (Multiline)
-      ##################################################
       - name: Slack Notification
         if: env.LEAKS_COUNT != '0'
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          # Dashboard linki kaldırıldı, sadece bulgular listeleniyor
+         
           MESSAGE=":rotating_light: *Gitleaks Secret Bulguları Tespit Edildi!*
           *Repo:* ${{ github.repository }}
           *Toplam Bulgu:* $LEAKS_COUNT
@@ -132,7 +119,6 @@ jobs:
           $LEAKS_DETAILS
           \`\`\`"
           
-          # JQ ile payload oluşturmak, LEAKS_DETAILS içindeki tüm yeni satırları (newline) korur.
           PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')
           
           curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"

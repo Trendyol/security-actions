@@ -28,10 +28,10 @@ jobs:
       - name: Run Gitleaks
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz && tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
-          START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; END=$(date +%s)
+          START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; 
           echo "Scan commit for alerting findings"
-          ./gitleaks detect --log-opts="--max-count=1 $GITHUB_SHA" --report-path commit-gitleaks.sarif --redact || true; 
-          echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_END
+          ./gitleaks detect --log-opts="--max-count=1 $GITHUB_SHA" --report-path commit-gitleaks.sarif --redact || true; END=$(date +%s)
+          echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
 
       - name: Run Semgrep Scan
         run: |

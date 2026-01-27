@@ -10,8 +10,10 @@ on:
 jobs:
   security-gates:
     runs-on: ubuntu-latest
+    # HATAYI ÇÖZEN KISIM: Dashboard'a yazma ve aksiyonları okuma izni
     permissions:
       security-events: write
+      actions: read
       contents: read
 
     steps:
@@ -24,12 +26,12 @@ jobs:
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
       ##################################################
-      # 🕵️ Araçları Çalıştır
+      # 🕵️ Araçları Çalıştır (SARIF Format)
       ##################################################
       - name: Run Gitleaks
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz && tar -xzf gitleaks_8.22.1_linux_x64.tar.gz
-          START=$(date +%s); ./gitleaks detect --report-format sarif --report-path gitleaks.sarif --redact || true; END=$(date +%s)
+          START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
 
       - name: Run Semgrep Scan
@@ -45,51 +47,62 @@ jobs:
           echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
 
       ##################################################
-      # 📊 Dashboard & Metrik Hesaplama
+      # 📊 Dashboard Yükleme (URI Fixli)
       ##################################################
       - name: Upload Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: .
+          checkout_path: ${{ github.workspace }} # URI/Path hatalarını azaltır
 
-      - name: Compute Detailed Counts
+      ##################################################
+      # 📊 Detaylı Sayım (Grype, Semgrep, Gitleaks)
+      ##################################################
+      - name: Compute vulnerability counts
         id: vuln_count
         run: |
-          # --- Gitleaks Detay (File:Line) ---
-          if [ -f gitleaks.sarif ]; then
-            LEAK_DETAILS=$(jq -r '.runs[0].results[] | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' gitleaks.sarif | head -n 5 | tr '\n' ' ')
-            LEAKS_COUNT=$(jq '[.runs[].results[]] | length' gitleaks.sarif || echo 0)
-          else
-            LEAKS_COUNT=0; LEAK_DETAILS="N/A"
-          fi
-
-          # --- Semgrep Severity Sayımı ---
-          if [ -f semgrep.sarif ]; then
-            S_ERROR=$(jq '[.runs[].results[] | select(.level == "error")] | length' semgrep.sarif || echo 0)
-            S_WARNING=$(jq '[.runs[].results[] | select(.level == "warning")] | length' semgrep.sarif || echo 0)
-          else
-            S_ERROR=0; S_WARNING=0
-          fi
-
-          # --- Grype Severity Sayımı ---
+          # --- GRYPE DETAY ---
           if [ -f grype.sarif ]; then
-            G_CRITICAL=$(jq '[.runs[].results[] | select(.properties.severity == "Critical")] | length' grype.sarif || echo 0)
+            G_CRIT=$(jq '[.runs[].results[] | select(.properties.severity == "Critical")] | length' grype.sarif || echo 0)
             G_HIGH=$(jq '[.runs[].results[] | select(.properties.severity == "High")] | length' grype.sarif || echo 0)
+            G_MED=$(jq '[.runs[].results[] | select(.properties.severity == "Medium")] | length' grype.sarif || echo 0)
+            G_LOW=$(jq '[.runs[].results[] | select(.properties.severity == "Low")] | length' grype.sarif || echo 0)
           else
-            G_CRITICAL=0; G_HIGH=0
+            G_CRIT=0; G_HIGH=0; G_MED=0; G_LOW=0
           fi
 
-          # ENV'ye kaydet
-          echo "GITLEAKS_COUNT=$LEAKS_COUNT" >> $GITHUB_ENV
-          echo "GITLEAKS_LOGS=$LEAK_DETAILS" >> $GITHUB_ENV
-          echo "SEMGREP_ERRORS=$S_ERROR" >> $GITHUB_ENV
-          echo "GRYPE_CRITICALS=$G_CRITICAL" >> $GITHUB_ENV
+          # --- SEMGREP DETAY ---
+          if [ -f semgrep.sarif ]; then
+            S_ERR=$(jq '[.runs[].results[] | select(.level == "error")] | length' semgrep.sarif || echo 0)
+            S_WARN=$(jq '[.runs[].results[] | select(.level == "warning")] | length' semgrep.sarif || echo 0)
+          else
+            S_ERR=0; S_WARN=0
+          fi
+
+          # --- GITLEAKS DETAY (File:Line) ---
+          if [ -f gitleaks.sarif ]; then
+            LEAK_TOTAL=$(jq '[.runs[].results[]] | length' gitleaks.sarif || echo 0)
+            # Loglar için ilk 5 bulgunun dosya:satır bilgisi
+            LEAK_LOGS=$(jq -r '.runs[0].results[] | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' gitleaks.sarif | head -n 5 | tr '\n' ' ')
+          else
+            LEAK_TOTAL=0; LEAK_LOGS="N/A"
+          fi
+
+          # Metrikleri ENV'ye bas
+          echo "G_CRITICAL=$G_CRIT" >> $GITHUB_ENV
+          echo "G_HIGH=$G_HIGH" >> $GITHUB_ENV
+          echo "G_MEDIUM=$G_MED" >> $GITHUB_ENV
+          echo "G_LOW=$G_LOW" >> $GITHUB_ENV
+          echo "S_ERROR=$S_ERR" >> $GITHUB_ENV
+          echo "S_WARNING=$S_WARN" >> $GITHUB_ENV
+          echo "LEAKS_COUNT=$LEAK_TOTAL" >> $GITHUB_ENV
+          echo "LEAKS_DETAILS=$LEAK_LOGS" >> $GITHUB_ENV
 
       ##################################################
-      # 🚀 Elastic Gönderimi (HATA GİDERİLDİ)
+      # 🚀 Elasticsearch Metrikleri (Bug Fixli)
       ##################################################
-      - name: Send metrics to Elasticsearch
+      - name: Send to Elastic
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
@@ -101,19 +114,19 @@ jobs:
             --arg repo "${{ github.repository }}" \
             --arg commit "${{ github.sha }}" \
             --arg actor "${{ github.actor }}" \
-            --arg leaks "$GITLEAKS_COUNT" \
-            --arg s_err "$SEMGREP_ERRORS" \
-            --arg g_crit "$GRYPE_CRITICALS" \
+            --arg g_crit "$G_CRITICAL" --arg g_high "$G_HIGH" --arg g_med "$G_MEDIUM" --arg g_low "$G_LOW" \
+            --arg s_err "$S_ERROR" --arg s_warn "$S_WARNING" \
+            --arg leaks "$LEAKS_COUNT" \
             --arg total_dur "$TOTAL_DURATION" \
             '{
               "@timestamp": $timestamp,
               "repository": $repo,
               "commit": $commit,
               "trigger_user": $actor,
-              "findings": {
-                "gitleaks": ($leaks | tonumber),
-                "semgrep_errors": ($s_err | tonumber),
-                "grype_critical": ($g_crit | tonumber)
+              "vulnerability_details": {
+                "grype": { "critical": ($g_crit | tonumber), "high": ($g_high | tonumber), "medium": ($g_med | tonumber), "low": ($g_low | tonumber) },
+                "semgrep": { "error": ($s_err | tonumber), "warning": ($s_warn | tonumber) },
+                "gitleaks_total": ($leaks | tonumber)
               },
               "total_duration_sec": ($total_dur | tonumber)
             }')
@@ -123,19 +136,18 @@ jobs:
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       ##################################################
-      # 📢 Slack (Sadece İlk Kez Çıkanlar İçin Dashboard Odaklı)
+      # 📢 Slack Notification (Yeni Bulgular)
       ##################################################
       - name: Slack Notification
-        if: env.GITLEAKS_COUNT != '0'
+        if: env.LEAKS_COUNT != '0'
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           MESSAGE=":rotating_light: *Gitleaks Bulgusu Tespit Edildi!*
           *Repo:* ${{ github.repository }}
-          *Yapan:* ${{ github.actor }}
-          *Bulgu Sayısı:* $GITLEAKS_COUNT
-          *Konum:* \`$GITLEAKS_LOGS\`
+          *Bulgu Sayısı:* $LEAKS_COUNT
+          *Konumlar:* \`$LEAKS_DETAILS\`
           
-          <https://github.com/${{ github.repository }}/security/code-scanning|Dashboard'dan incele ve FP ise 'Dismiss' et.>"
+          <https://github.com/${{ github.repository }}/security/code-scanning|Dashboard'dan incele. Yeni değilse dismiss et!>"
           
           curl -X POST -H 'Content-type: application/json' --data "$(jq -n --arg text "$MESSAGE" '{text: $text}')" "$SLACK_WEBHOOK_URL"

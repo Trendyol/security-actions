@@ -118,10 +118,10 @@ jobs:
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       - name: Slack Notification
-        if: env.CURRENT_LEAKS_COUNT != '0'
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          if [ env.CURRENT_LEAKS_COUNT != '0' ]; then
           MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli <!subteam^S094H6SEC06|appsec-oncall>*
           *Repo:* "https://github.com/${{ github.repository }}"
           Commit: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
@@ -136,3 +136,4 @@ jobs:
           PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')
           
           curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+          fi

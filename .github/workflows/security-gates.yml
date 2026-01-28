@@ -126,11 +126,11 @@ jobs:
           *Repo:* "https://github.com/${{ github.repository }}"
           Commit: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
           Kullanıcı: "https://github.com/${{ github.actor }}"
-          *Toplam Bulgu:* env.CURRENT_LEAKS_COUNT
+          *Toplam Bulgu:* ${{ env.CURRENT_LEAKS_COUNT }}
 
           *Bulguların Listesi:*
           \`\`\`
-          env.CURRENT_LEAKS_DETAILS
+          ${{ env.CURRENT_LEAKS_DETAILS }}
           \`\`\`"
           
           PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')

@@ -56,35 +56,37 @@ jobs:
       - name: Compute vulnerability counts
         id: vuln_count
         run: |
-          S_TOTAL=$(jq '[.runs[].results[]?] | length' semgrep.sarif || echo 0)
-          G_CRIT=$(jq '[.runs[].results[]? | select(.properties.severity == "Critical")] | length' grype.sarif || echo 0)
+          safe_count() {
+            if [ -f "$1" ] && [ -s "$1" ]; then
+              # Check if it's an object with .runs, otherwise treat as 0
+              jq 'if type == "object" and .runs then [.runs[].results[]?] | length else 0 end' "$1" || echo 0
+            else
+              echo 0
+            fi
+          }
 
+          S_TOTAL=$(safe_count semgrep.sarif)
+          G_CRIT=$(jq 'if type == "object" and .runs then [.runs[].results[]? | select(.properties.severity == "Critical")] | length else 0 end' grype.sarif || echo 0)
           
-          if [ -f gitleaks.sarif ]; then
-            LEAK_COUNT=$(jq '[.runs[].results[]?] | length' gitleaks.sarif || echo 0)
-            
-           
-            echo "LEAKS_DETAILS<<EOF" >> "$GITHUB_ENV"
-            jq -r '.runs[].results[]? | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' gitleaks.sarif >> "$GITHUB_ENV"
-            echo "EOF" >> "$GITHUB_ENV"
-          else
-            LEAK_COUNT=0
-            echo "LEAKS_DETAILS=Bulgu yok." >> "$GITHUB_ENV"
-          fi
-  
+          # Process Gitleaks (Full Scan)
+          LEAK_COUNT=$(safe_count gitleaks.sarif)
           echo "LEAKS_COUNT=$LEAK_COUNT" >> "$GITHUB_ENV"
+
+          # Process Gitleaks (Current Commit)
+          if [ -f commit-gitleaks.sarif ]; then
+            CURRENT_LEAK_COUNT=$(safe_count commit-gitleaks.sarif)
+            echo "CURRENT_LEAKS_COUNT=$CURRENT_LEAK_COUNT" >> "$GITHUB_ENV"
+            
+            echo "CURRENT_LEAKS_DETAILS<<DELIMITER" >> "$GITHUB_ENV"
+            jq -r 'if type == "object" and .runs then .runs[].results[]? | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)" else "No findings" end' commit-gitleaks.sarif >> "$GITHUB_ENV"
+            echo "DELIMITER" >> "$GITHUB_ENV"
+          else
+            echo "CURRENT_LEAK_COUNT=0" >> "$GITHUB_ENV"
+            echo "CURRENT_LEAKS_DETAILS=Commit'te Bulgu yok." >> "$GITHUB_ENV"
+          fi
+
           echo "S_TOTAL=$S_TOTAL" >> "$GITHUB_ENV"
           echo "G_CRITICAL=$G_CRIT" >> "$GITHUB_ENV"
-          
-           if [ -f commit-gitleaks.sarif ]; then
-            CURRENT_LEAK_COUNT=$(jq '[.runs[].results[]?] | length' commit-gitleaks.sarif || echo 0)  
-            echo "CURRENT_LEAKS_DETAILS<<EOF" >> "$GITHUB_ENV"
-            jq -r '.runs[].results[]? | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' commit-gitleaks.sarif >> "$GITHUB_ENV"
-            echo "EOF" >> "$GITHUB_ENV"
-           else
-            LEAK_COUNT=0          
-            echo "CURRENT_LEAKS_DETAILS= Commit'te Bulgu yok." >> "$GITHUB_ENV"
-           fi
       
       - name: Send to Elastic
         env:

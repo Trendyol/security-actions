@@ -1,0 +1,165 @@
+name: security-gates
+
+on:
+  workflow_call:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  security-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set start time
+        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+
+
+      - name: Run Gitleaks
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz && tar -xzf gitleaks_8.28.0_linux_x64.tar.gz
+          START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; 
+          echo "Scan commit for alerting findings"
+          ./gitleaks detect --source . --log-opts="--max-count=1 $GITHUB_SHA" --report-format json --report-path commit-gitleaks.json --redact || true; END=$(date +%s)
+          echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
+
+      - name: Run Semgrep Scan
+        run: |
+          pip install semgrep
+          START=$(date +%s); semgrep scan --config="p/default" --sarif --output=semgrep.sarif || true; END=$(date +%s)
+          echo "SEMGREP_DURATION=$((END - START))" >> $GITHUB_ENV
+
+      - name: Run Grype SBOM scan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          START=$(date +%s); grype dir:. -o sarif > grype.sarif || true; END=$(date +%s)
+          echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
+
+      - name: Compute vulnerability counts
+        id: vuln_count
+        run: |
+            get_count() {
+              if [ -f "$1" ]; then
+                COUNT=$(jq '[.runs[].results[]?] | length' "$1" 2>/dev/null || echo 0)
+                echo "$COUNT"
+              else
+                echo 0
+              fi
+            }
+  
+            get_gitleaks_json_count() {
+              if [ -f "$1" ]; then
+                # gitleaks json çıktısı: [ { ... }, { ... } ]
+                COUNT=$(jq 'if type=="array" then length else 0 end' "$1" 2>/dev/null || echo 0)
+                echo "$COUNT"
+              else
+                echo 0
+              fi
+            }
+  
+            S_TOTAL=$(get_count semgrep.sarif)
+            G_CRIT=$(jq '[.runs[].results[]? | select(.properties.severity == "Critical")] | length' grype.sarif 2>/dev/null || echo 0)
+            
+            TOTAL_LEAKS=$(get_count gitleaks.sarif)
+            CURRENT_LEAKS=$(get_gitleaks_json_count commit-gitleaks.json)
+  
+            echo "Debug: Full Leaks: $TOTAL_LEAKS"
+            echo "Debug: Current Commit Leaks: $CURRENT_LEAKS"
+  
+            echo "S_TOTAL=$S_TOTAL" >> "$GITHUB_ENV"
+            echo "G_CRITICAL=$G_CRIT" >> "$GITHUB_ENV"
+            echo "TOTAL_LEAKS_COUNT=$TOTAL_LEAKS" >> "$GITHUB_ENV"
+            echo "CURRENT_LEAKS_COUNT=$CURRENT_LEAKS" >> "$GITHUB_ENV"
+  
+            if [ "$CURRENT_LEAKS" -gt 0 ]; then
+              echo "CURRENT_LEAKS_DETAILS<<DELIMITER" >> "$GITHUB_ENV"
+              jq -r '
+                if type=="array" then
+                  .[]
+                  | "\(.File):\(.StartLine) [\(.RuleID)] \(.Description)"
+                else
+                  empty
+                end
+              ' commit-gitleaks.json >> "$GITHUB_ENV"
+              echo "DELIMITER" >> "$GITHUB_ENV"
+            else
+              echo "CURRENT_LEAKS_DETAILS=Temiz" >> "$GITHUB_ENV"
+            fi
+        
+      - name: Send to Elastic
+        env:
+          CA_CERT: ${{ secrets.APPSEC_CA }}    
+        run: |
+          TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
+          echo "$CA_CERT" > trendyolrootca.crt
+
+          PAYLOAD=$(jq -n \
+            --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg repo "${{ github.repository }}" \
+            --arg leaks "$TOTAL_LEAKS_COUNT" \
+            --arg s_total "$S_TOTAL" \
+            --arg g_crit "$G_CRITICAL" \
+            --arg total_dur "$TOTAL_DURATION" \
+            '{
+              "@timestamp": $timestamp,
+              "repository": $repo,
+              "vulnerability_summary": {
+                "gitleaks": ($leaks | tonumber),
+                "semgrep_total": ($s_total | tonumber),
+                "grype_critical": ($g_crit | tonumber)
+              },
+              "total_duration_sec": ($total_dur | tonumber)
+            }')
+
+          curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
+            -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
+            --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
+
+      - name: Slack Notification
+        env: 
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+ 
+          echo "Current leaks count: $CURRENT_LEAKS_COUNT"
+          
+          if [ "$CURRENT_LEAKS_COUNT" -ne 0 ]; then
+            echo "Bulgu bulundu, mesaj gönderiliyor..."
+
+            MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli*
+            *Repo:* https://github.com/${{ github.repository }}
+            *Commit:* https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+            *Kullanıcı:* https://github.com/${{ github.actor }}
+            *Toplam Bulgu:* $CURRENT_LEAKS_COUNT
+  
+            *Bulguların Listesi:*
+            \`\`\`
+            $CURRENT_LEAKS_DETAILS
+            \`\`\`"
+            
+            # jq ile güvenli JSON oluşturma
+            PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')
+            
+            curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+          else
+            echo "$CURRENT_LEAKS_DETAILS"
+          fi
+              
+      - name: Cleanup unwanted files
+        run: rm -f commit-gitleaks.json
+        
+      - name: Upload Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && github.event.repository.private == false
+        with:
+          sarif_file: .
+          checkout_path: ${{ github.workspace }}

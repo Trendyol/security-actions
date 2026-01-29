@@ -135,7 +135,7 @@ jobs:
           if [ "$CURRENT_LEAKS_COUNT" -ne 0 ]; then
             echo "Bulgu bulundu, mesaj gönderiliyor..."
 
-            MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli*
+            MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli <!subteam^S094H6SEC06|appsec-oncall>*
             *Repo:* https://github.com/${{ github.repository }}
             *Commit:* https://github.com/${{ github.repository }}/commit/${{ github.sha }}
             *Kullanıcı:* https://github.com/${{ github.actor }}

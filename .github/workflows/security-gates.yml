@@ -107,8 +107,12 @@ jobs:
             fi
         
       - name: Send to Elastic
+        if: ${{ secrets.APPSEC_ELASTIC_URL != '' }}
         env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}    
+          CA_CERT: ${{ secrets.APPSEC_CA }}
+          ELASTIC_URL: ${{ secrets.APPSEC_ELASTIC_URL }}
+          ELASTIC_USER: ${{ secrets.APPSEC_ELASTIC_USER }}
+          ELASTIC_PASS: ${{ secrets.APPSEC_ELASTIC_PASS }}
         run: |
           TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
           echo "$CA_CERT" > trendyolrootca.crt
@@ -131,11 +135,12 @@ jobs:
               "total_duration_sec": ($total_dur | tonumber)
             }')
 
-          curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
-            -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
+          curl -X POST "$ELASTIC_URL" \
+            -u "$ELASTIC_USER:$ELASTIC_PASS" \
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       - name: Slack Notification
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |

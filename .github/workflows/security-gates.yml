@@ -45,6 +45,16 @@ jobs:
           START=$(date +%s); grype dir:. -o sarif > grype.sarif || true; END=$(date +%s)
           echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
 
+      - name: Ensure valid SARIF files
+        run: |
+          EMPTY_SARIF='{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0","runs":[{"tool":{"driver":{"name":"unknown","rules":[]}},"results":[]}]}'
+          for f in gitleaks.sarif semgrep.sarif grype.sarif; do
+            if [ ! -s "$f" ] || ! jq empty "$f" 2>/dev/null; then
+              echo "$EMPTY_SARIF" | jq --arg name "${f%.sarif}" '.runs[0].tool.driver.name = $name' > "$f"
+              echo "Fixed invalid SARIF: $f"
+            fi
+          done
+
       - name: Compute vulnerability counts
         id: vuln_count
         run: |

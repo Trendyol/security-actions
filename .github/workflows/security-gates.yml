@@ -107,13 +107,16 @@ jobs:
             fi
         
       - name: Send to Elastic
-        if: ${{ secrets.APPSEC_ELASTIC_URL != '' }}
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}
           ELASTIC_URL: ${{ secrets.APPSEC_ELASTIC_URL }}
           ELASTIC_USER: ${{ secrets.APPSEC_ELASTIC_USER }}
           ELASTIC_PASS: ${{ secrets.APPSEC_ELASTIC_PASS }}
         run: |
+          if [ -z "$ELASTIC_URL" ]; then
+            echo "APPSEC_ELASTIC_URL secret not set, skipping Elastic upload."
+            exit 0
+          fi
           TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
           echo "$CA_CERT" > trendyolrootca.crt
 
@@ -140,11 +143,14 @@ jobs:
             --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
 
       - name: Slack Notification
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
- 
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL secret not set, skipping Slack notification."
+            exit 0
+          fi
+
           echo "Current leaks count: $CURRENT_LEAKS_COUNT"
           
           if [ "$CURRENT_LEAKS_COUNT" -ne 0 ]; then

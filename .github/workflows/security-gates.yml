@@ -109,12 +109,12 @@ jobs:
           # curl "URL rejected: Malformed input" hatasi verir. Degeri loglamadan kontrol et.
           ELASTIC_URL=$(printf '%s' "$ELASTIC_URL" | tr -d '[:space:]')
           if [ -z "$ELASTIC_URL" ]; then
-            echo "::warning::APPSEC_ELASTIC_URL empty"
-            exit 0
+            echo "::warning::APPSEC_ELASTIC_URL empty."
+            exit 1
           fi
           case "$ELASTIC_URL" in
             http://*|https://*) ;;
-            *) echo "::warning::APPSEC_ELASTIC_URL invalid"; exit 0 ;;
+            *) echo "::warning::APPSEC_ELASTIC_URL invalid"; exit 1 ;;
           esac
 
           echo "$CA_CERT" > trendyolrootca.crt

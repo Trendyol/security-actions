@@ -10,10 +10,7 @@ on:
 jobs:
   security-gates:
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
+
 
     steps:
       - name: Checkout
@@ -117,25 +114,41 @@ jobs:
             *) echo "::warning::APPSEC_ELASTIC_URL invalid"; exit 1 ;;
           esac
 
-          echo "$CA_CERT" > trendyolrootca.crt
+                  echo "$CA_CERT" > trendyolrootca.crt
 
-          PAYLOAD=$(jq -n \
+          # SARIF ciktilarini sadece bos degilse (icinde bulgu varsa) payload'a ekle.
+          JQ_ARGS=()
+          SCAN_FILTER=""
+          add_sarif() {
+            key="$1"; file="$2"
+            if [ -f "$file" ] && [ "$(jq '[.runs[].results[]?] | length' "$file" 2>/dev/null || echo 0)" -gt 0 ]; then
+              JQ_ARGS+=(--slurpfile "$key" "$file")
+              SCAN_FILTER="$SCAN_FILTER | .scan_results.$key = \$$key[0]"
+            fi
+          }
+          add_sarif gitleaks gitleaks.sarif
+          add_sarif semgrep semgrep.sarif
+          add_sarif grype grype.sarif
+
+          BASE_FILTER='{
+            "@timestamp": $timestamp,
+            "repository": $repo,
+            "vulnerability_summary": {
+              "gitleaks": ($leaks | tonumber),
+              "semgrep_total": ($s_total | tonumber),
+              "grype_critical": ($g_crit | tonumber)
+            },
+            "total_duration_sec": ($total_dur | tonumber)
+          }'
+
+          PAYLOAD=$(jq -n "${JQ_ARGS[@]}" \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
             --arg repo "${{ github.repository }}" \
             --arg leaks "$TOTAL_LEAKS_COUNT" \
             --arg s_total "$S_TOTAL" \
             --arg g_crit "$G_CRITICAL" \
             --arg total_dur "$TOTAL_DURATION" \
-            '{
-              "@timestamp": $timestamp,
-              "repository": $repo,
-              "vulnerability_summary": {
-                "gitleaks": ($leaks | tonumber),
-                "semgrep_total": ($s_total | tonumber),
-                "grype_critical": ($g_crit | tonumber)
-              },
-              "total_duration_sec": ($total_dur | tonumber)
-            }')
+            "$BASE_FILTER $SCAN_FILTER")
 
           curl -X POST "$ELASTIC_URL" \
             -u "$ELASTIC_USER:$ELASTIC_PASS" \
@@ -173,9 +186,4 @@ jobs:
       - name: Cleanup unwanted files
         run: rm -f commit-gitleaks.json
         
-      - name: Upload Results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && github.event.repository.private == false
-        with:
-          sarif_file: .
-          checkout_path: ${{ github.workspace }}
+

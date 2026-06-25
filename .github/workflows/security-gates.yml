@@ -10,10 +10,7 @@ on:
 jobs:
   security-gates:
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
+
 
     steps:
       - name: Checkout
@@ -28,7 +25,7 @@ jobs:
       - name: Run Gitleaks
         run: |
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz && tar -xzf gitleaks_8.28.0_linux_x64.tar.gz
-          START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact || true; 
+          START=$(date +%s); ./gitleaks detect --source . --report-format json --report-path gitleaks.json --redact || true;
           echo "Scan commit for alerting findings"
           ./gitleaks detect --source . --log-opts="--max-count=1 $GITHUB_SHA" --report-format json --report-path commit-gitleaks.json --redact || true; END=$(date +%s)
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
@@ -42,7 +39,7 @@ jobs:
       - name: Run Grype SBOM scan
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-          START=$(date +%s); grype dir:. -o sarif > grype.sarif || true; END=$(date +%s)
+          START=$(date +%s); grype dir:. -o json > grype.json || true; END=$(date +%s)
           echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
 
       - name: Compute vulnerability counts
@@ -67,10 +64,10 @@ jobs:
               fi
             }
   
-            S_TOTAL=$(get_count semgrep.sarif)
-            G_CRIT=$(jq '[.runs[].results[]? | select(.properties.severity == "Critical")] | length' grype.sarif 2>/dev/null || echo 0)
-            
-            TOTAL_LEAKS=$(get_count gitleaks.sarif)
+            S_TOTAL=$(jq '[.runs[].results[]?] | length' semgrep.sarif 2>/dev/null || echo 0)
+            G_CRIT=$(jq '[.matches[]? | select(.vulnerability.severity == "Critical")] | length' grype.json 2>/dev/null || echo 0)
+
+            TOTAL_LEAKS=$(jq 'if type=="array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
             CURRENT_LEAKS=$(get_gitleaks_json_count commit-gitleaks.json)
   
             echo "Debug: Full Leaks: $TOTAL_LEAKS"
@@ -98,32 +95,72 @@ jobs:
         
       - name: Send to Elastic
         env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}    
+          CA_CERT: ${{ secrets.APPSEC_CA }}
+          ELASTIC_URL: ${{ secrets.APPSEC_ELASTIC_URL }}
+          ELASTIC_USER: ${{ secrets.APPSEC_ELASTIC_USER }}
+          ELASTIC_PASS: ${{ secrets.APPSEC_ELASTIC_PASS }}
         run: |
           TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
-          echo "$CA_CERT" > trendyolrootca.crt
 
-          PAYLOAD=$(jq -n \
+          # Variable/secret bos gelirse ya da gizli bosluk/yeni satir icerirse
+          # curl "URL rejected: Malformed input" hatasi verir. Degeri loglamadan kontrol et.
+          ELASTIC_URL=$(printf '%s' "$ELASTIC_URL" | tr -d '[:space:]')
+          if [ -z "$ELASTIC_URL" ]; then
+            echo "::warning::APPSEC_ELASTIC_URL empty."
+            exit 1
+          fi
+          case "$ELASTIC_URL" in
+            http://*|https://*) ;;
+            *) echo "::warning::APPSEC_ELASTIC_URL invalid"; exit 1 ;;
+          esac
+
+          echo "$CA_CERT" > trendyolrootca.crt
+                    JQ_ARGS=()
+          SCAN_FILTER=""
+          add_scan() {
+            key="$1"; file="$2"
+            [ -s "$file" ] || return 0
+            n=$(jq '
+              if type=="array" then length
+              elif has("matches") then (.matches | length)
+              elif has("results") then (.results | length)
+              elif has("runs") then ([.runs[].results[]?] | length)
+              else 0 end' "$file" 2>/dev/null || echo 0)
+            if [ "${n:-0}" -gt 0 ]; then
+              JQ_ARGS+=(--slurpfile "$key" "$file")
+              # ES mapping cakismasini onlemek icin nested obje yerine JSON string olarak ekle
+              SCAN_FILTER="$SCAN_FILTER | .scan_results.$key = (\$$key[0] | tojson)"
+            fi
+          }
+          add_scan gitleaks gitleaks.json
+          add_scan semgrep semgrep.sarif
+          add_scan grype grype.json
+
+          BASE_FILTER='{
+            "@timestamp": $timestamp,
+            "repository": $repo,
+            "vulnerability_summary": {
+              "gitleaks": ($leaks | tonumber),
+              "semgrep_total": ($s_total | tonumber),
+              "grype_critical": ($g_crit | tonumber)
+            },
+            "total_duration_sec": ($total_dur | tonumber)
+          }'
+
+          # Payload buyuk olabilecegi icin dosyaya yaz: "Argument list too long" hatasini onler.
+          jq -n "${JQ_ARGS[@]}" \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
             --arg repo "${{ github.repository }}" \
             --arg leaks "$TOTAL_LEAKS_COUNT" \
             --arg s_total "$S_TOTAL" \
             --arg g_crit "$G_CRITICAL" \
             --arg total_dur "$TOTAL_DURATION" \
-            '{
-              "@timestamp": $timestamp,
-              "repository": $repo,
-              "vulnerability_summary": {
-                "gitleaks": ($leaks | tonumber),
-                "semgrep_total": ($s_total | tonumber),
-                "grype_critical": ($g_crit | tonumber)
-              },
-              "total_duration_sec": ($total_dur | tonumber)
-            }')
+            "$BASE_FILTER $SCAN_FILTER" > payload.json
 
-          curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
-            -u "${{ secrets.APPSEC_ELASTIC_USER }}:${{ secrets.APPSEC_ELASTIC_PASS }}" \
-            --cacert trendyolrootca.crt -H "Content-Type: application/json" -d "$PAYLOAD"
+          curl -X POST "$ELASTIC_URL" \
+            -u "$ELASTIC_USER:$ELASTIC_PASS" \
+            --cacert trendyolrootca.crt -H "Content-Type: application/json" \
+            --data-binary @payload.json
 
       - name: Slack Notification
         env: 
@@ -157,9 +194,4 @@ jobs:
       - name: Cleanup unwanted files
         run: rm -f commit-gitleaks.json
         
-      - name: Upload Results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && github.event.repository.private == false
-        with:
-          sarif_file: .
-          checkout_path: ${{ github.workspace }}
+

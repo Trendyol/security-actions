@@ -100,8 +100,6 @@ jobs:
         run: |
           TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
 
-          # Variable/secret bos gelirse ya da gizli bosluk/yeni satir icerirse
-          # curl "URL rejected: Malformed input" hatasi verir. Degeri loglamadan kontrol et.
           ELASTIC_URL=$(printf '%s' "$ELASTIC_URL" | tr -d '[:space:]')
           if [ -z "$ELASTIC_URL" ]; then
             echo "::warning::APPSEC_ELASTIC_URL empty."
@@ -113,10 +111,38 @@ jobs:
           esac
 
           echo "$CA_CERT" > trendyolrootca.crt
-                    JQ_ARGS=()
-          SCAN_FILTER=""
-          add_scan() {
-            key="$1"; file="$2"
+          TS="$(date --utc +'%Y-%m-%dT%H:%M:%SZ')"
+
+          send_doc() {
+            curl -sS -X POST "$ELASTIC_URL" \
+              -u "$ELASTIC_USER:$ELASTIC_PASS" \
+              --cacert trendyolrootca.crt \
+              -H "Content-Type: application/json" \
+              --data-binary "@$1"
+            echo
+          }
+          jq -n \
+            --arg timestamp "$TS" \
+            --arg repo "${{ github.repository }}" \
+            --arg leaks "$TOTAL_LEAKS_COUNT" \
+            --arg s_total "$S_TOTAL" \
+            --arg g_crit "$G_CRITICAL" \
+            --arg total_dur "$TOTAL_DURATION" \
+            '{
+              "@timestamp": $timestamp,
+              "repository": $repo,
+              "doc_type": "summary",
+              "vulnerability_summary": {
+                "gitleaks": ($leaks | tonumber),
+                "semgrep_total": ($s_total | tonumber),
+                "grype_critical": ($g_crit | tonumber)
+              },
+              "total_duration_sec": ($total_dur | tonumber)
+            }' > summary.json
+          send_doc summary.json
+
+          send_scan() {
+            scanner="$1"; file="$2"
             [ -s "$file" ] || return 0
             n=$(jq '
               if type=="array" then length
@@ -124,41 +150,24 @@ jobs:
               elif has("results") then (.results | length)
               elif has("runs") then ([.runs[].results[]?] | length)
               else 0 end' "$file" 2>/dev/null || echo 0)
-            if [ "${n:-0}" -gt 0 ]; then
-              JQ_ARGS+=(--slurpfile "$key" "$file")
-              # ES mapping cakismasini onlemek icin nested obje yerine JSON string olarak ekle
-              SCAN_FILTER="$SCAN_FILTER | .scan_results.$key = (\$$key[0] | tojson)"
-            fi
+            [ "${n:-0}" -gt 0 ] || return 0
+            jq -n \
+              --arg timestamp "$TS" \
+              --arg repo "${{ github.repository }}" \
+              --arg scanner "$scanner" \
+              --slurpfile results "$file" \
+              '{
+                "@timestamp": $timestamp,
+                "repository": $repo,
+                "doc_type": "scan_result",
+                "scanner": $scanner,
+                "result": ($results[0] | tojson)
+              }' > "scan_${scanner}.json"
+            send_doc "scan_${scanner}.json"
           }
-          add_scan gitleaks gitleaks.json
-          add_scan semgrep semgrep.sarif
-          add_scan grype grype.json
-
-          BASE_FILTER='{
-            "@timestamp": $timestamp,
-            "repository": $repo,
-            "vulnerability_summary": {
-              "gitleaks": ($leaks | tonumber),
-              "semgrep_total": ($s_total | tonumber),
-              "grype_critical": ($g_crit | tonumber)
-            },
-            "total_duration_sec": ($total_dur | tonumber)
-          }'
-
-          # Payload buyuk olabilecegi icin dosyaya yaz: "Argument list too long" hatasini onler.
-          jq -n "${JQ_ARGS[@]}" \
-            --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
-            --arg repo "${{ github.repository }}" \
-            --arg leaks "$TOTAL_LEAKS_COUNT" \
-            --arg s_total "$S_TOTAL" \
-            --arg g_crit "$G_CRITICAL" \
-            --arg total_dur "$TOTAL_DURATION" \
-            "$BASE_FILTER $SCAN_FILTER" > payload.json
-
-          curl -X POST "$ELASTIC_URL" \
-            -u "$ELASTIC_USER:$ELASTIC_PASS" \
-            --cacert trendyolrootca.crt -H "Content-Type: application/json" \
-            --data-binary @payload.json
+          send_scan gitleaks gitleaks.json
+          send_scan semgrep semgrep.sarif
+          send_scan grype grype.json
 
       - name: Slack Notification
         env: 

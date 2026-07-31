@@ -1,204 +1,24 @@
-name: security-gates
+name: Security Gates
 
 on:
-  workflow_call:
   push:
-    branches: [ "main", "master" ]
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions: {}
 
 jobs:
-  security-gates:
+  validate:
     runs-on: ubuntu-latest
-
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Validate Workflow
+        run: echo "Validation successful"
 
-      - name: Set start time
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
-
-
-      - name: Run Gitleaks
-        run: |
-          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz && tar -xzf gitleaks_8.28.0_linux_x64.tar.gz
-          START=$(date +%s); ./gitleaks detect --source . --report-format json --report-path gitleaks.json --redact || true;
-          echo "Scan commit for alerting findings"
-          ./gitleaks detect --source . --log-opts="--max-count=1 $GITHUB_SHA" --report-format json --report-path commit-gitleaks.json --redact || true; END=$(date +%s)
-          echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      - name: Run Semgrep Scan
-        run: |
-          pip install semgrep
-          START=$(date +%s); semgrep scan --config="p/default" --sarif --output=semgrep.sarif || true; END=$(date +%s)
-          echo "SEMGREP_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      - name: Run Grype SBOM scan
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-          START=$(date +%s); grype dir:. -o json > grype.json || true; END=$(date +%s)
-          echo "GRYPE_DURATION=$((END - START))" >> $GITHUB_ENV
-
-      - name: Compute vulnerability counts
-        id: vuln_count
-        run: |
-            get_count() {
-              if [ -f "$1" ]; then
-                COUNT=$(jq '[.runs[].results[]?] | length' "$1" 2>/dev/null || echo 0)
-                echo "$COUNT"
-              else
-                echo 0
-              fi
-            }
-  
-            get_gitleaks_json_count() {
-              if [ -f "$1" ]; then
-                # gitleaks json çıktısı: [ { ... }, { ... } ]
-                COUNT=$(jq 'if type=="array" then length else 0 end' "$1" 2>/dev/null || echo 0)
-                echo "$COUNT"
-              else
-                echo 0
-              fi
-            }
-  
-            S_TOTAL=$(jq '[.runs[].results[]?] | length' semgrep.sarif 2>/dev/null || echo 0)
-            G_CRIT=$(jq '[.matches[]? | select(.vulnerability.severity == "Critical")] | length' grype.json 2>/dev/null || echo 0)
-
-            TOTAL_LEAKS=$(jq 'if type=="array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
-            CURRENT_LEAKS=$(get_gitleaks_json_count commit-gitleaks.json)
-  
-            echo "Debug: Full Leaks: $TOTAL_LEAKS"
-            echo "Debug: Current Commit Leaks: $CURRENT_LEAKS"
-  
-            echo "S_TOTAL=$S_TOTAL" >> "$GITHUB_ENV"
-            echo "G_CRITICAL=$G_CRIT" >> "$GITHUB_ENV"
-            echo "TOTAL_LEAKS_COUNT=$TOTAL_LEAKS" >> "$GITHUB_ENV"
-            echo "CURRENT_LEAKS_COUNT=$CURRENT_LEAKS" >> "$GITHUB_ENV"
-  
-            if [ "$CURRENT_LEAKS" -gt 0 ]; then
-              echo "CURRENT_LEAKS_DETAILS<<DELIMITER" >> "$GITHUB_ENV"
-              jq -r '
-                if type=="array" then
-                  .[]
-                  | "\(.File):\(.StartLine) [\(.RuleID)] \(.Description)"
-                else
-                  empty
-                end
-              ' commit-gitleaks.json >> "$GITHUB_ENV"
-              echo "DELIMITER" >> "$GITHUB_ENV"
-            else
-              echo "CURRENT_LEAKS_DETAILS=Temiz" >> "$GITHUB_ENV"
-            fi
-        
-      - name: Send to Elastic
-        env:
-          CA_CERT: ${{ secrets.APPSEC_CA }}
-          ELASTIC_URL: ${{ secrets.APPSEC_ELASTIC_URL }}
-          ELASTIC_USER: ${{ secrets.APPSEC_ELASTIC_USER }}
-          ELASTIC_PASS: ${{ secrets.APPSEC_ELASTIC_PASS }}
-        run: |
-          TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
-
-          ELASTIC_URL=$(printf '%s' "$ELASTIC_URL" | tr -d '[:space:]')
-          if [ -z "$ELASTIC_URL" ]; then
-            echo "::warning::APPSEC_ELASTIC_URL empty."
-            exit 0
-          fi
-          case "$ELASTIC_URL" in
-            http://*|https://*) ;;
-            *) echo "::warning::APPSEC_ELASTIC_URL invalid"; exit 0 ;;
-          esac
-
-          echo "$CA_CERT" > trendyolrootca.crt
-          TS="$(date --utc +'%Y-%m-%dT%H:%M:%SZ')"
-
-          send_doc() {
-            curl -sS -X POST "$ELASTIC_URL" \
-              -u "$ELASTIC_USER:$ELASTIC_PASS" \
-              --cacert trendyolrootca.crt \
-              -H "Content-Type: application/json" \
-              --data-binary "@$1"
-            echo
-          }
-          jq -n \
-            --arg timestamp "$TS" \
-            --arg repo "${{ github.repository }}" \
-            --arg leaks "$TOTAL_LEAKS_COUNT" \
-            --arg s_total "$S_TOTAL" \
-            --arg g_crit "$G_CRITICAL" \
-            --arg total_dur "$TOTAL_DURATION" \
-            '{
-              "@timestamp": $timestamp,
-              "repository": $repo,
-              "doc_type": "summary",
-              "vulnerability_summary": {
-                "gitleaks": ($leaks | tonumber),
-                "semgrep_total": ($s_total | tonumber),
-                "grype_critical": ($g_crit | tonumber)
-              },
-              "total_duration_sec": ($total_dur | tonumber)
-            }' > summary.json
-          send_doc summary.json
-
-          send_scan() {
-            scanner="$1"; file="$2"
-            [ -s "$file" ] || return 0
-            n=$(jq '
-              if type=="array" then length
-              elif has("matches") then (.matches | length)
-              elif has("results") then (.results | length)
-              elif has("runs") then ([.runs[].results[]?] | length)
-              else 0 end' "$file" 2>/dev/null || echo 0)
-            [ "${n:-0}" -gt 0 ] || return 0
-            jq -n \
-              --arg timestamp "$TS" \
-              --arg repo "${{ github.repository }}" \
-              --arg scanner "$scanner" \
-              --slurpfile results "$file" \
-              '{
-                "@timestamp": $timestamp,
-                "repository": $repo,
-                "doc_type": "scan_result",
-                "scanner": $scanner,
-                "result": ($results[0] | tojson)
-              }' > "scan_${scanner}.json"
-            send_doc "scan_${scanner}.json"
-          }
-          send_scan gitleaks gitleaks.json
-          send_scan semgrep semgrep.sarif
-          send_scan grype grype.json
-
-      - name: Slack Notification
-        env: 
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
- 
-          echo "Current leaks count: $CURRENT_LEAKS_COUNT"
-          
-          if [ "$CURRENT_LEAKS_COUNT" -ne 0 ]; then
-            echo "Bulgu bulundu, mesaj gönderiliyor..."
-
-            MESSAGE=":rotating_light: *Son Commit'te Gitleaks Secret Bulguları Tespit Edildi! İnceleme Gerekli <!subteam^S094H6SEC06|appsec-oncall>*
-            *Repo:* https://github.com/${{ github.repository }}
-            *Commit:* https://github.com/${{ github.repository }}/commit/${{ github.sha }}
-            *Kullanıcı:* https://github.com/${{ github.actor }}
-            *Toplam Bulgu:* $CURRENT_LEAKS_COUNT
-  
-            *Bulguların Listesi:*
-            \`\`\`
-            $CURRENT_LEAKS_DETAILS
-            \`\`\`"
-            
-            # jq ile güvenli JSON oluşturma
-            PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')
-            
-            curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
-          else
-            echo "$CURRENT_LEAKS_DETAILS"
-          fi
-              
-      - name: Cleanup unwanted files
-        run: rm -f commit-gitleaks.json
-        
-
+  security-gates:
+    uses: Trendyol/security-actions/.github/workflows/security-gates.yml@master
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    secrets: inherit

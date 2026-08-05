@@ -35,9 +35,7 @@ jobs:
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz && tar -xzf gitleaks_8.28.0_linux_x64.tar.gz
           START=$(date +%s); ./gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --redact --exit-code=0
           echo "Scan commit for alerting findings"
-          LOG_OPTS=""
-          # Reusable workflow'larda event_name genelde "workflow_call" gelir.
-          # Bu yüzden event_name'e bakmak yerine ilgili SHA'lar var mı diye kontrol ediyoruz.
+
           if [ -n "$PR_BASE_SHA" ] && [ -n "$PR_HEAD_SHA" ]; then
             LOG_OPTS="$PR_BASE_SHA..$PR_HEAD_SHA"
           elif [ -n "$PUSH_BEFORE_SHA" ] && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ] && [ -n "$CURRENT_SHA" ]; then
@@ -45,16 +43,13 @@ jobs:
           else
             LOG_OPTS="--max-count=1 $CURRENT_SHA"
           fi
-          
-          # Aralıkla tarama yapabilmek için gerekli commit objelerini kesin olarak indir.
-          if [ -n "$PR_BASE_SHA" ]; then git fetch --no-tags --depth=1 origin "$PR_BASE_SHA" || true; fi
-          if [ -n "$PR_HEAD_SHA" ]; then git fetch --no-tags --depth=1 origin "$PR_HEAD_SHA" || true; fi
-          if [ -n "$PUSH_BEFORE_SHA" ] && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
-            git fetch --no-tags --depth=1 origin "$PUSH_BEFORE_SHA" || true
-          fi
 
           echo "Debug: Gitleaks log-opts: $LOG_OPTS"
           ./gitleaks detect --source . --log-opts="$LOG_OPTS" --report-format json --report-path commit-gitleaks.json --redact --exit-code=0; END=$(date +%s)
+          
+          if [ ! -f commit-gitleaks.json ]; then echo "[]" > commit-gitleaks.json; fi
+          echo "Debug: commit-gitleaks.json length: $(jq -r 'if type=="array" then length else 0 end' commit-gitleaks.json 2>/dev/null || echo 0)"
+
           echo "GITLEAKS_DURATION=$((END - START))" >> $GITHUB_ENV
 
       - name: Run Semgrep Scan

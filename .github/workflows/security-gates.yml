@@ -24,7 +24,6 @@ jobs:
       - name: Set start time
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
-
       - name: Run Gitleaks
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -78,7 +77,6 @@ jobs:
   
             get_gitleaks_json_count() {
               if [ -f "$1" ]; then
-                # gitleaks json çıktısı: [ { ... }, { ... } ]
                 COUNT=$(jq 'if type=="array" then length else 0 end' "$1" 2>/dev/null || echo 0)
                 echo "$COUNT"
               else
@@ -114,13 +112,16 @@ jobs:
             else
               echo "CURRENT_LEAKS_DETAILS=Temiz" >> "$GITHUB_ENV"
             fi
-        
+
       - name: Send to Elastic
         env:
           CA_CERT: ${{ secrets.APPSEC_CA }}    
         run: |
           TOTAL_DURATION=$(( $(date +%s) - START_TIME ))
           echo "$CA_CERT" > trendyolrootca.crt
+
+          # commit-gitleaks.json dosyasını oku (Yoksa veya boşsa boş array fallback'i uygula)
+          COMMIT_LEAKS_DATA=$(cat commit-gitleaks.json 2>/dev/null || echo "[]")
 
           PAYLOAD=$(jq -n \
             --arg timestamp "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -129,6 +130,7 @@ jobs:
             --arg s_total "$S_TOTAL" \
             --arg g_crit "$G_CRITICAL" \
             --arg total_dur "$TOTAL_DURATION" \
+            --argjson raw_data "$COMMIT_LEAKS_DATA" \
             '{
               "@timestamp": $timestamp,
               "repository": $repo,
@@ -137,7 +139,8 @@ jobs:
                 "semgrep_total": ($s_total | tonumber),
                 "grype_critical": ($g_crit | tonumber)
               },
-              "total_duration_sec": ($total_dur | tonumber)
+              "total_duration_sec": ($total_dur | tonumber),
+              "data": $raw_data
             }')
 
           curl -X POST "${{ secrets.APPSEC_ELASTIC_URL }}" \
@@ -148,7 +151,6 @@ jobs:
         env: 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
- 
           echo "Current leaks count: $CURRENT_LEAKS_COUNT"
           
           if [ "$CURRENT_LEAKS_COUNT" -ne 0 ]; then
@@ -165,7 +167,6 @@ jobs:
             $CURRENT_LEAKS_DETAILS
             \`\`\`"
             
-            # jq ile güvenli JSON oluşturma
             PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{text: $msg}')
             
             curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
